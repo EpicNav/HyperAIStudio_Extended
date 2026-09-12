@@ -18,6 +18,8 @@ public:
 	void Construct(const FArguments& InArgs);
 	bool IsActiveOrSelectedAgent(const FString& AgentName) const;
 	void SelectAgentByName(const FString& AgentName);
+	/** Restart the terminal on that chat's agent, resuming the conversation. */
+	void ResumeChat(const struct FHyperAIStudioChatSession& Session);
 	void RunVisibleTerminalCommand(const FString& Command, const FString& Label);
 	static void EnqueueVisibleTerminalCommand(const FString& Command, const FString& Label);
 	static FText GetReadinessTextForStatus(const FHyperAIStudioStatus& InStatus, bool bIsRefreshing);
@@ -87,4 +89,7 @@ private:
 	FString PendingVisibleTerminalCommand;
 	FString PendingVisibleTerminalLabel;
 	FString ActiveTerminalAgentName;
+	/** Chat the next agent startup resumes; cleared once that startup is sent. */
+	FString ResumeAgentName;
+	FString ResumeSessionId;
 };

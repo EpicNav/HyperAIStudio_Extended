@@ -2,8 +2,9 @@
 
 #include "SHyperAIStudioPromptComposer.h"
 
+#include "Async/Async.h"
 #include "Framework/Application/SlateApplication.h"
-#include "HyperAIStudioPromptHistory.h"
+#include "HyperAIStudioService.h"
 #include "Styling/AppStyle.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
@@ -34,13 +35,28 @@ namespace HyperAIStudio::PromptComposer
 			{ LOCTEXT("ExampleBlueprint", "Explain Blueprint nodes"), TEXT("Explain the selected Blueprint nodes using the context pack. Describe execution flow, data flow, side effects, and risky assumptions. Do not modify the Blueprint.") }
 		};
 	}
+
+	FText RelativeTime(const FDateTime& Utc)
+	{
+		const FTimespan Age = FDateTime::UtcNow() - Utc;
+		if (Age.GetTotalMinutes() < 60.0)
+		{
+			return FText::Format(LOCTEXT("MinutesAgo", "{0}m ago"), FMath::Max(1, FMath::FloorToInt(Age.GetTotalMinutes())));
+		}
+		if (Age.GetTotalHours() < 24.0)
+		{
+			return FText::Format(LOCTEXT("HoursAgo", "{0}h ago"), FMath::FloorToInt(Age.GetTotalHours()));
+		}
+		return FText::Format(LOCTEXT("DaysAgo", "{0}d ago"), FMath::FloorToInt(Age.GetTotalDays()));
+	}
 }
 
 void SHyperAIStudioPromptComposer::Construct(const FArguments& InArgs)
 {
 	OnSubmit = InArgs._OnSubmit;
 	OnEscape = InArgs._OnEscape;
-	AgentName = InArgs._AgentName;
+	OnResumeChat = InArgs._OnResumeChat;
+	InputEnabled = InArgs._InputEnabled;
 
 	ChildSlot
 	[
@@ -52,9 +68,10 @@ void SHyperAIStudioPromptComposer::Construct(const FArguments& InArgs)
 			.MaxDesiredHeight(140.0f)
 			[
 				SAssignNew(InputBox, SMultiLineEditableTextBox)
+				.IsEnabled(InputEnabled)
 				.Text_Lambda([this]() { return CurrentText; })
 				.OnTextChanged_Lambda([this](const FText& NewText) { CurrentText = NewText; })
-				.HintText(LOCTEXT("ComposerHint", "Message the agent. Enter sends, Shift+Enter adds a line, Up recalls history."))
+				.HintText(LOCTEXT("ComposerHint", "Message the agent. Enter sends, Shift+Enter adds a line."))
 				.ModiferKeyForNewLine(EModifierKey::Shift) // sic: Epic's spelling.
 				.ClearKeyboardFocusOnCommit(false)
 				.AutoWrapText(true)
@@ -68,7 +85,7 @@ void SHyperAIStudioPromptComposer::Construct(const FArguments& InArgs)
 		.Padding(6.0f, 0.0f, 0.0f, 0.0f)
 		[
 			SAssignNew(HistoryButton, SComboButton)
-			.ToolTipText(LOCTEXT("HistoryTooltip", "Previous prompts and examples"))
+			.ToolTipText(LOCTEXT("HistoryTooltip", "Chat history: resume a past agent conversation from this project"))
 			.OnGetMenuContent(this, &SHyperAIStudioPromptComposer::BuildHistoryMenu)
 			.ButtonContent()
 			[
@@ -85,7 +102,7 @@ void SHyperAIStudioPromptComposer::Construct(const FArguments& InArgs)
 			SNew(SButton)
 			.Text(LOCTEXT("Send", "Send"))
 			.ToolTipText(LOCTEXT("SendTooltip", "Send to the agent (Enter)"))
-			.IsEnabled_Lambda([this]() { return !CurrentText.ToString().TrimStartAndEnd().IsEmpty(); })
+			.IsEnabled_Lambda([this]() { return InputEnabled.Get(true) && !CurrentText.ToString().TrimStartAndEnd().IsEmpty(); })
 			.OnClicked_Lambda([this]()
 			{
 				Submit();
@@ -108,13 +125,10 @@ void SHyperAIStudioPromptComposer::Submit()
 	FString Text = CurrentText.ToString();
 	// Trailing whitespace only: leading indentation can matter in pasted code.
 	Text.TrimEndInline();
-	if (Text.TrimStart().IsEmpty() || !OnSubmit.IsBound() || !OnSubmit.Execute(Text))
+	if (!InputEnabled.Get(true) || Text.TrimStart().IsEmpty() || !OnSubmit.IsBound() || !OnSubmit.Execute(Text))
 	{
 		return;
 	}
-
-	UHyperAIStudioPromptHistory::Record(Text, AgentName.Get(FString()));
-	RecallIndex = INDEX_NONE;
 	SetComposerText(FString());
 }
 
@@ -140,55 +154,43 @@ void SHyperAIStudioPromptComposer::HandleTextCommitted(const FText& NewText, ETe
 
 FReply SHyperAIStudioPromptComposer::HandleKeyDown(const FGeometry& Geometry, const FKeyEvent& KeyEvent)
 {
-	const FKey Key = KeyEvent.GetKey();
-	const bool bNoModifiers = !KeyEvent.IsShiftDown() && !KeyEvent.IsControlDown() && !KeyEvent.IsAltDown() && !KeyEvent.IsCommandDown();
-	if (bNoModifiers && (Key == EKeys::Up || Key == EKeys::Down))
-	{
-		return RecallHistory(Key == EKeys::Up ? 1 : -1) ? FReply::Handled() : FReply::Unhandled();
-	}
-
-	if (Key == EKeys::Escape && OnEscape.IsBound())
+	if (KeyEvent.GetKey() == EKeys::Escape && OnEscape.IsBound())
 	{
 		OnEscape.Execute();
 		return FReply::Handled();
 	}
-
 	return FReply::Unhandled();
 }
 
-bool SHyperAIStudioPromptComposer::RecallHistory(int32 Direction)
+void SHyperAIStudioPromptComposer::LoadSessions()
 {
-	const TArray<FHyperAIStudioPromptHistoryEntry>& Entries = GetDefault<UHyperAIStudioPromptHistory>()->Entries;
-	const FString Current = CurrentText.ToString();
-	const bool bShowingRecalled = Entries.IsValidIndex(RecallIndex) && Entries[RecallIndex].Text == Current;
-
-	// Once the user edits the text, arrows go back to moving the cursor.
-	if (!Current.IsEmpty() && !bShowingRecalled)
+	if (bLoadingSessions)
 	{
-		return false;
+		return;
 	}
-
-	const int32 Next = (bShowingRecalled ? RecallIndex : INDEX_NONE) + Direction;
-	if (Next < 0)
+	bLoadingSessions = true;
+	// Session files can be tens of megabytes; read them off the game thread.
+	TWeakPtr<SHyperAIStudioPromptComposer> WeakThis = SharedThis(this);
+	Async(EAsyncExecution::ThreadPool, [WeakThis, Root = FHyperAIStudioService::GetProjectRoot()]()
 	{
-		RecallIndex = INDEX_NONE;
-		SetComposerText(FString());
-		return true;
-	}
-	if (!Entries.IsValidIndex(Next))
-	{
-		return bShowingRecalled;
-	}
-
-	RecallIndex = Next;
-	SetComposerText(Entries[Next].Text);
-	return true;
+		TArray<FHyperAIStudioChatSession> Loaded = HyperAIStudio::ChatHistory::ListSessions(Root);
+		AsyncTask(ENamedThreads::GameThread, [WeakThis, Loaded = MoveTemp(Loaded)]() mutable
+		{
+			if (const TSharedPtr<SHyperAIStudioPromptComposer> Pinned = WeakThis.Pin())
+			{
+				Pinned->Sessions = MoveTemp(Loaded);
+				Pinned->bLoadingSessions = false;
+				Pinned->RebuildFilteredSessions();
+			}
+		});
+	});
 }
 
 TSharedRef<SWidget> SHyperAIStudioPromptComposer::BuildHistoryMenu()
 {
-	HistoryFilter.Reset();
-	RebuildFilteredHistory();
+	SessionFilter.Reset();
+	RebuildFilteredSessions();
+	LoadSessions();
 
 	TSharedRef<SWrapBox> Examples = SNew(SWrapBox).UseAllottedSize(true);
 	for (const HyperAIStudio::PromptComposer::FExamplePrompt& Example : HyperAIStudio::PromptComposer::ExamplePrompts())
@@ -200,9 +202,9 @@ TSharedRef<SWidget> SHyperAIStudioPromptComposer::BuildHistoryMenu()
 			SNew(SButton)
 			.Text(Example.Label)
 			.ToolTipText(FText::FromString(Prompt))
+			.IsEnabled(InputEnabled)
 			.OnClicked_Lambda([this, Prompt]()
 			{
-				RecallIndex = INDEX_NONE;
 				SetComposerText(Prompt);
 				HistoryButton->SetIsOpen(false);
 				FocusInput();
@@ -212,7 +214,7 @@ TSharedRef<SWidget> SHyperAIStudioPromptComposer::BuildHistoryMenu()
 	}
 
 	return SNew(SBox)
-		.WidthOverride(460.0f)
+		.WidthOverride(520.0f)
 		.Padding(8.0f)
 		[
 			SNew(SVerticalBox)
@@ -220,11 +222,11 @@ TSharedRef<SWidget> SHyperAIStudioPromptComposer::BuildHistoryMenu()
 			.AutoHeight()
 			[
 				SNew(SSearchBox)
-				.HintText(LOCTEXT("HistorySearchHint", "Search previous prompts"))
+				.HintText(LOCTEXT("HistorySearchHint", "Search agent chats"))
 				.OnTextChanged_Lambda([this](const FText& Filter)
 				{
-					HistoryFilter = Filter.ToString();
-					RebuildFilteredHistory();
+					SessionFilter = Filter.ToString();
+					RebuildFilteredSessions();
 				})
 			]
 			+ SVerticalBox::Slot()
@@ -234,29 +236,40 @@ TSharedRef<SWidget> SHyperAIStudioPromptComposer::BuildHistoryMenu()
 				SNew(STextBlock)
 				.Text_Lambda([this]()
 				{
-					return HistoryFilter.IsEmpty()
-						? LOCTEXT("HistoryEmpty", "No prompts sent yet.")
-						: LOCTEXT("HistoryNoMatch", "No prompts match.");
+					if (bLoadingSessions && Sessions.IsEmpty())
+					{
+						return LOCTEXT("HistoryLoading", "Reading agent chat history...");
+					}
+					return SessionFilter.IsEmpty()
+						? LOCTEXT("HistoryEmpty", "No Claude Code or Codex chats have run in this project yet.")
+						: LOCTEXT("HistoryNoMatch", "No chats match.");
 				})
-				.Visibility_Lambda([this]() { return FilteredHistory.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed; })
+				.Visibility_Lambda([this]() { return FilteredSessions.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed; })
 				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 			]
 			+ SVerticalBox::Slot()
-			.MaxHeight(260.0f)
+			.MaxHeight(320.0f)
 			.Padding(0.0f, 6.0f, 0.0f, 0.0f)
 			[
-				SAssignNew(HistoryList, SListView<FEntryPtr>)
-				.ListItemsSource(&FilteredHistory)
+				SAssignNew(SessionList, SListView<FSessionPtr>)
+				.ListItemsSource(&FilteredSessions)
 				.SelectionMode(ESelectionMode::Single)
-				.OnGenerateRow(this, &SHyperAIStudioPromptComposer::GenerateHistoryRow)
-				.OnMouseButtonClick_Lambda([this](FEntryPtr Entry) { HandleHistoryPicked(Entry, ESelectInfo::OnMouseClick); })
+				.OnGenerateRow(this, &SHyperAIStudioPromptComposer::GenerateSessionRow)
+				.OnMouseButtonClick_Lambda([this](FSessionPtr Session)
+				{
+					if (Session.IsValid() && OnResumeChat.IsBound())
+					{
+						HistoryButton->SetIsOpen(false);
+						OnResumeChat.Execute(*Session);
+					}
+				})
 			]
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(0.0f, 10.0f, 0.0f, 4.0f)
 			[
 				SNew(STextBlock)
-				.Text(LOCTEXT("ExamplesLabel", "Examples"))
+				.Text(LOCTEXT("ExamplesLabel", "Example prompts"))
 				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 			]
 			+ SVerticalBox::Slot()
@@ -264,63 +277,38 @@ TSharedRef<SWidget> SHyperAIStudioPromptComposer::BuildHistoryMenu()
 			[
 				Examples
 			]
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.HAlign(HAlign_Right)
-			.Padding(0.0f, 6.0f, 0.0f, 0.0f)
-			[
-				SNew(SButton)
-				.Text(LOCTEXT("ClearHistory", "Clear History"))
-				.ToolTipText(LOCTEXT("ClearHistoryTooltip", "Forget every previous prompt, including any saved to disk."))
-				.IsEnabled_Lambda([]() { return !GetDefault<UHyperAIStudioPromptHistory>()->Entries.IsEmpty(); })
-				.OnClicked_Lambda([this]()
-				{
-					UHyperAIStudioPromptHistory::Clear();
-					RecallIndex = INDEX_NONE;
-					RebuildFilteredHistory();
-					return FReply::Handled();
-				})
-			]
 		];
 }
 
-void SHyperAIStudioPromptComposer::RebuildFilteredHistory()
+void SHyperAIStudioPromptComposer::RebuildFilteredSessions()
 {
-	FilteredHistory.Reset();
-	for (const FHyperAIStudioPromptHistoryEntry& Entry : GetDefault<UHyperAIStudioPromptHistory>()->Entries)
+	FilteredSessions.Reset();
+	for (const FHyperAIStudioChatSession& Session : Sessions)
 	{
-		if (HistoryFilter.IsEmpty() || Entry.Text.Contains(HistoryFilter))
+		if (SessionFilter.IsEmpty() || Session.Title.Contains(SessionFilter) || Session.AgentName.Contains(SessionFilter))
 		{
-			FilteredHistory.Add(MakeShared<FHyperAIStudioPromptHistoryEntry>(Entry));
+			FilteredSessions.Add(MakeShared<FHyperAIStudioChatSession>(Session));
 		}
 	}
-
-	if (HistoryList.IsValid())
+	if (SessionList.IsValid())
 	{
-		HistoryList->RequestListRefresh();
+		SessionList->RequestListRefresh();
 	}
 }
 
-TSharedRef<ITableRow> SHyperAIStudioPromptComposer::GenerateHistoryRow(FEntryPtr Entry, const TSharedRef<STableViewBase>& OwnerTable)
+TSharedRef<ITableRow> SHyperAIStudioPromptComposer::GenerateSessionRow(FSessionPtr Session, const TSharedRef<STableViewBase>& OwnerTable)
 {
-	TArray<FString> Lines;
-	Entry->Text.ParseIntoArrayLines(Lines, false);
-	FString Label = Lines.Num() > 0 ? Lines[0] : Entry->Text;
-	if (Lines.Num() > 1)
-	{
-		Label += FString::Printf(TEXT("  (+%d lines)"), Lines.Num() - 1);
-	}
-
-	return SNew(STableRow<FEntryPtr>, OwnerTable)
+	return SNew(STableRow<FSessionPtr>, OwnerTable)
 		.Padding(FMargin(4.0f, 3.0f))
-		.ToolTipText(FText::FromString(Entry->Text))
+		.ToolTipText(FText::Format(LOCTEXT("SessionRowTooltip", "Resume in {0}\n{1}\nSession {2}"),
+			FText::FromString(Session->AgentName), FText::FromString(Session->Title), FText::FromString(Session->SessionId)))
 		[
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot()
 			.FillWidth(1.0f)
 			[
 				SNew(STextBlock)
-				.Text(FText::FromString(Label))
+				.Text(FText::FromString(Session->Title))
 				.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
 			]
 			+ SHorizontalBox::Slot()
@@ -328,24 +316,11 @@ TSharedRef<ITableRow> SHyperAIStudioPromptComposer::GenerateHistoryRow(FEntryPtr
 			.Padding(12.0f, 0.0f, 0.0f, 0.0f)
 			[
 				SNew(STextBlock)
-				.Text(FText::FromString(Entry->AgentName))
+				.Text(FText::Format(LOCTEXT("SessionRowMeta", "{0}  {1}"),
+					FText::FromString(Session->AgentName), HyperAIStudio::PromptComposer::RelativeTime(Session->LastActiveUtc)))
 				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 			]
 		];
-}
-
-void SHyperAIStudioPromptComposer::HandleHistoryPicked(FEntryPtr Entry, ESelectInfo::Type SelectInfo)
-{
-	if (!Entry.IsValid())
-	{
-		return;
-	}
-
-	// Load for review; never auto-send a stale prompt to a live agent.
-	RecallIndex = INDEX_NONE;
-	SetComposerText(Entry->Text);
-	HistoryButton->SetIsOpen(false);
-	FocusInput();
 }
 
 #undef LOCTEXT_NAMESPACE

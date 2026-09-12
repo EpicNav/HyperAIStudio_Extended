@@ -222,14 +222,6 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow")
 	bool bAllowClipboardPromptCopy = true;
 
-	/**
-	 * Keep HyperAI Chat prompt history across editor restarts, in this user's Saved/Config EditorPerProjectUserSettings.ini.
-	 * Off by default because prompts can contain confidential project text. History is always kept for the current session,
-	 * and Clear History in the chat panel also removes anything already saved.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow")
-	bool bPersistPromptHistory = false;
-
 	/** Models offered per chat agent. Agents without an entry get one the first time HyperAI Chat opens. */
 	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Models")
 	TArray<FHyperAIStudioAgentModelRoute> AgentModelRoutes;

@@ -3,19 +3,20 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "HyperAIStudioAgentChatHistory.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Views/SListView.h"
 
 class SComboButton;
 class SMultiLineEditableTextBox;
-struct FHyperAIStudioPromptHistoryEntry;
 
-/** Return true once the text reached the agent. The composer clears and records history only on true. */
+/** Return true once the text reached the agent. The composer clears only on true. */
 DECLARE_DELEGATE_RetVal_OneParam(bool, FHyperAIStudioOnPromptSubmit, const FString& /*Text*/);
+DECLARE_DELEGATE_OneParam(FHyperAIStudioOnResumeChat, const FHyperAIStudioChatSession& /*Session*/);
 
 /**
- * Multi-line prompt box for the chat panel. Enter sends, Shift+Enter inserts a newline, Up/Down on an empty or
- * unedited box walks prompt history, Escape hands focus back to the terminal.
+ * Multi-line prompt box for the chat panel. Enter sends, Shift+Enter inserts a newline, Escape hands focus back to
+ * the terminal. The history button lists this project's past agent chats and resumes the one picked.
  */
 class SHyperAIStudioPromptComposer : public SCompoundWidget
 {
@@ -23,38 +24,38 @@ public:
 	SLATE_BEGIN_ARGS(SHyperAIStudioPromptComposer) {}
 		SLATE_EVENT(FHyperAIStudioOnPromptSubmit, OnSubmit)
 		SLATE_EVENT(FSimpleDelegate, OnEscape)
-		/** Recorded with each history entry. */
-		SLATE_ATTRIBUTE(FString, AgentName)
+		SLATE_EVENT(FHyperAIStudioOnResumeChat, OnResumeChat)
+		/** Typing needs a running agent; chat history does not. */
+		SLATE_ATTRIBUTE(bool, InputEnabled)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
 	void FocusInput() const;
 
 private:
-	using FEntryPtr = TSharedPtr<FHyperAIStudioPromptHistoryEntry>;
+	using FSessionPtr = TSharedPtr<FHyperAIStudioChatSession>;
 
 	void Submit();
 	void SetComposerText(const FString& NewText);
 	void HandleTextCommitted(const FText& NewText, ETextCommit::Type CommitType);
 	FReply HandleKeyDown(const FGeometry& Geometry, const FKeyEvent& KeyEvent);
-	bool RecallHistory(int32 Direction);
 
 	TSharedRef<SWidget> BuildHistoryMenu();
-	void RebuildFilteredHistory();
-	TSharedRef<ITableRow> GenerateHistoryRow(FEntryPtr Entry, const TSharedRef<STableViewBase>& OwnerTable);
-	void HandleHistoryPicked(FEntryPtr Entry, ESelectInfo::Type SelectInfo);
+	void LoadSessions();
+	void RebuildFilteredSessions();
+	TSharedRef<ITableRow> GenerateSessionRow(FSessionPtr Session, const TSharedRef<STableViewBase>& OwnerTable);
 
 	FHyperAIStudioOnPromptSubmit OnSubmit;
 	FSimpleDelegate OnEscape;
-	TAttribute<FString> AgentName;
+	FHyperAIStudioOnResumeChat OnResumeChat;
+	TAttribute<bool> InputEnabled;
 
 	TSharedPtr<SMultiLineEditableTextBox> InputBox;
 	TSharedPtr<SComboButton> HistoryButton;
-	TSharedPtr<SListView<FEntryPtr>> HistoryList;
-	TArray<FEntryPtr> FilteredHistory;
+	TSharedPtr<SListView<FSessionPtr>> SessionList;
+	TArray<FHyperAIStudioChatSession> Sessions;
+	TArray<FSessionPtr> FilteredSessions;
 	FText CurrentText;
-	FString HistoryFilter;
-
-	/** Index into history of the entry currently shown by Up/Down recall, or INDEX_NONE. */
-	int32 RecallIndex = INDEX_NONE;
+	FString SessionFilter;
+	bool bLoadingSessions = false;
 };

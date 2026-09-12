@@ -5,6 +5,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "HyperAIStudioAgentChatHistory.h"
 #include "HyperAIStudioStyle.h"
 #include "HyperAIStudioTerminalRawInput.h"
 #include "ISettingsModule.h"
@@ -65,7 +66,7 @@ namespace HyperAIStudio::QuickAction
 
 	FText InitialReadyMessage()
 	{
-		return LOCTEXT("InitialReadyMessage", "Message the agent from the box under the terminal: Enter sends, Shift+Enter adds a line, Up recalls history. Copy Prompt is only for manual handoff/context fallback.");
+		return LOCTEXT("InitialReadyMessage", "Message the agent from the box under the terminal: Enter sends, Shift+Enter adds a line, the history button resumes a past chat. Copy Prompt is only for manual handoff/context fallback.");
 	}
 
 	FText InitialSetupMessage()
@@ -239,8 +240,8 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 						FSlateApplication::Get().SetKeyboardFocus(TerminalWidget, EFocusCause::SetDirectly);
 					}
 				})
-				.AgentName_Lambda([this]() { return ActiveTerminalAgentName.IsEmpty() ? GetSelectedAgentName() : ActiveTerminalAgentName; })
-				.IsEnabled_Lambda([this]() { return TerminalWidget.IsValid() && TerminalWidget->IsSessionRunning(); })
+				.OnResumeChat(this, &SHyperAIStudioQuickActionWindow::ResumeChat)
+				.InputEnabled_Lambda([this]() { return TerminalWidget.IsValid() && TerminalWidget->IsSessionRunning(); })
 			]
 			+ SVerticalBox::Slot()
 			.AutoHeight()
@@ -306,6 +307,39 @@ void SHyperAIStudioQuickActionWindow::SelectAgentByName(const FString& AgentName
 			QueueTerminalStartup(true, true);
 			return;
 		}
+	}
+}
+
+void SHyperAIStudioQuickActionWindow::ResumeChat(const FHyperAIStudioChatSession& Session)
+{
+	if (HyperAIStudio::ChatHistory::BuildResumeArguments(Session.AgentName, Session.SessionId).IsEmpty())
+	{
+		return;
+	}
+	RefreshAgentOptions();
+	const bool bAgentUsable = AgentOptions.ContainsByPredicate([&Session](const TSharedPtr<FString>& Agent)
+	{
+		return Agent.IsValid() && Agent->Equals(Session.AgentName, ESearchCase::IgnoreCase);
+	});
+	if (!bAgentUsable)
+	{
+		LastMessage = FText::Format(LOCTEXT("ResumeAgentUnavailable", "{0} is not set up for HyperAI Chat, so that chat cannot be resumed here."),
+			FText::FromString(Session.AgentName));
+		AddTranscriptLine(LastMessage.ToString());
+		return;
+	}
+
+	ResumeAgentName = Session.AgentName;
+	ResumeSessionId = Session.SessionId;
+	LastMessage = FText::Format(LOCTEXT("ResumingChat", "Resuming {0} chat: {1}"), FText::FromString(Session.AgentName), FText::FromString(Session.Title));
+	AddTranscriptLine(LastMessage.ToString());
+	if (GetSelectedAgentName().Equals(Session.AgentName, ESearchCase::IgnoreCase))
+	{
+		QueueTerminalStartup(true, true);
+	}
+	else
+	{
+		SelectAgentByName(Session.AgentName);
 	}
 }
 
@@ -525,7 +559,7 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildSettingsMenu()
 		FUIAction(FExecuteAction::CreateSPLambda(this, [this]() { OnOpenWorkbenchClicked(); })));
 	Menu.AddMenuEntry(
 		LOCTEXT("ChatSettingsEntry", "Chat Settings..."),
-		LOCTEXT("ChatSettingsEntryTooltip", "Agent models, prompt history persistence and agent options."),
+		LOCTEXT("ChatSettingsEntryTooltip", "Agent models and agent options."),
 		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Edit"),
 		FUIAction(FExecuteAction::CreateLambda([]() { HyperAIStudio::QuickAction::OpenSettingsPage(GetDefault<UHyperAIStudioSettings>()); })));
 	Menu.AddMenuEntry(
@@ -1007,6 +1041,8 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunDeferredTerminalStart
 		}
 	}
 	TerminalWidget->ExecuteCommand(BuildTerminalBootstrapCommand(AgentName));
+	ResumeAgentName.Reset();
+	ResumeSessionId.Reset();
 	bTerminalStartupSent = true;
 	ActiveTerminalAgentName = AgentName;
 	Invalidate(EInvalidateWidgetReason::Paint);
@@ -1098,6 +1134,13 @@ FString SHyperAIStudioQuickActionWindow::GetTerminalLaunchCommandForAgent(const 
 	if (const HyperAIStudio::QuickAction::FAgentRoute* Route = HyperAIStudio::QuickAction::FindBuiltInRoute(AgentName))
 	{
 		FString LaunchCommand = FHyperAIStudioService::GetAgentTerminalLaunchCommand(Route->Name);
+		const FString ResumeArguments = ResumeAgentName.Equals(Route->Name, ESearchCase::IgnoreCase)
+			? HyperAIStudio::ChatHistory::BuildResumeArguments(Route->Name, ResumeSessionId)
+			: FString();
+		if (!LaunchCommand.IsEmpty() && !ResumeArguments.IsEmpty())
+		{
+			LaunchCommand += TEXT(" ") + ResumeArguments;
+		}
 		const FHyperAIStudioAgentModelRoute* ModelRoute = GetDefault<UHyperAIStudioSettings>()->FindAgentModelRoute(Route->Name);
 		FString ModelArgument;
 		FString ModelError;
