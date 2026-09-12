@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HyperAIStudio Documentation</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, Segoe UI, Arial, sans-serif;
+      line-height: 1.5;
+      color: #20242a;
+      background: #f7f8fa;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+    }
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 46px 24px 72px;
+    }
+    h1, h2, h3 {
+      line-height: 1.15;
+      margin: 0 0 14px;
+    }
+    h1 {
+      font-size: 42px;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin-top: 34px;
+      font-size: 24px;
+    }
+    h3 {
+      margin-top: 18px;
+      font-size: 18px;
+    }
+    p, li {
+      font-size: 16px;
+    }
+    code {
+      font-family: Consolas, Menlo, monospace;
+      background: rgba(0,0,0,0.07);
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+    pre {
+      overflow-x: auto;
+      background: rgba(0,0,0,0.07);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    pre code {
+      background: transparent;
+      padding: 0;
+    }
+    .lead {
+      font-size: 18px;
+      color: #4a5360;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+    .panel {
+      background: #fff;
+      border: 1px solid #d9dee6;
+      border-radius: 8px;
+      padding: 22px;
+      margin-top: 24px;
+    }
+    .card {
+      background: #fff;
+      border: 1px solid #d9dee6;
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .steps {
+      padding-left: 24px;
+    }
+    .note {
+      color: #5a6472;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color: #e9edf3;
+        background: #15171b;
+      }
+      .lead, .note {
+        color: #b7c0cc;
+      }
+      .panel, .card {
+        background: #1d2026;
+        border-color: #343944;
+      }
+      code, pre {
+        background: rgba(255,255,255,0.1);
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>HyperAIStudio</h1>
+    <p class="lead">HyperAIStudio is a usability layer for Epic Unreal MCP in Unreal Engine 5.8. It helps artists, designers, and programmers connect external coding agents such as Codex, Claude Code, Gemini, Cursor, and VS Code/Copilot to a live Unreal Editor project without learning every MCP setup detail.</p>
+
+    <section class="grid">
+      <div class="card">
+        <h3>One setup button</h3>
+        <p>Configures Unreal MCP, enables useful Unreal-side plugins, generates agent files, and verifies readiness.</p>
+      </div>
+      <div class="card">
+        <h3>External agent workflow</h3>
+        <p>Your configured agent client keeps its own runtime. HyperAIStudio prepares Unreal context, copies the handoff, and opens the selected client from the project root when available. Lifecycle and reconnect guidance is the same for every supported agent.</p>
+      </div>
+      <div class="card">
+        <h3>Editor context handoff</h3>
+        <p>Selected Blueprint/PCG assets, actors, and Blueprint/PCG graph nodes can be packaged into small project-local context files for the agent.</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>First Run</h2>
+      <ol class="steps">
+        <li>Use the startup prompt, <code>Tools &gt; HyperAIStudio</code>, <code>Tools &gt; HyperAI Chat</code>, or the HyperAIStudio status bar button.</li>
+        <li>Press <code>Start Setup</code> from the prompt or from the Setup tab.</li>
+        <li>Restart the editor if Unreal reports newly enabled plugins.</li>
+        <li>Verify until readiness shows the required plugins, local MCP server, generated agent files, at least one configured agent, and <code>tools/list</code> reachable.</li>
+        <li>Ready projects should use the separate docked panel, <code>HyperAI Chat</code>, for daily handoff. Choose a configured terminal-capable agent, type directly in the embedded project-root terminal, and use <code>Stop Agent</code> before switching or when finished. Use <code>Copy Prompt</code> for manual handoff/context fallback. Setup, agent files, MCP profiles, and docs stay in the HyperAIStudio workbench tabs: <code>Setup</code>, <code>Agents</code>, <code>MCP</code>, and <code>Docs</code>.</li>
+      </ol>
+    </section>
+
+    <section class="panel">
+      <h2>What HyperAIStudio Generates</h2>
+      <ul>
+        <li><code>AGENTS.md</code>: shared project instructions for external agents.</li>
+        <li><code>CLAUDE.md</code>: thin Claude Code notes that import the shared instructions.</li>
+        <li><code>.codex/config.toml</code>: Codex MCP config with <code>unreal-mcp</code>.</li>
+        <li><code>.mcp.json</code>: Claude Code MCP config.</li>
+        <li><code>.gemini/settings.json</code>: Gemini MCP config.</li>
+        <li><code>.cursor/mcp.json</code> and <code>.vscode/mcp.json</code>: Cursor and VS Code/Copilot MCP config.</li>
+        <li><code>.hyperai/scripts/Start-HyperAIStudioEditor.ps1</code>: starts or reconnects the editor.</li>
+        <li><code>.hyperai/scripts/Wait-HyperAIStudioMCP.ps1</code>: waits for the MCP endpoint and verifies <code>tools/list</code>.</li>
+        <li><code>.hyperai/scripts/Send-HyperAIStudioPrompt.ps1</code>: copies generated prompt/context instructions and starts the selected CLI or project-root editor when available.</li>
+        <li><code>.hyperai/docs/HyperAIStudio-TestCommands.md</code>: generated test and connection guidance.</li>
+        <li><code>.hyperai/README.md</code> and <code>.hyperai/INDEX.md</code>: preserved, managed guidance for the shared project workspace and its useful history.</li>
+      </ul>
+      <h3>Shared Project Workspace</h3>
+      <p>Useful agent collaboration belongs in source control under <code>.hyperai/work/YYYY-MM-DD-&lt;clear-context-name&gt;/</code>. Use a clear lowercase kebab-case name and add only the planning, context, prompts, research, decisions, logs, or temporary task files that are actually useful. Do not create generic <code>Planning</code>, <code>Temp</code>, <code>Research</code>, <code>Notes</code>, or <code>Scripts</code> folders in the project root.</p>
+      <p>Architecture and product decisions use a dated descriptive filename inside the relevant workpackage. Agents update a concise dated log after meaningful work and consult <code>.hyperai/INDEX.md</code> only when prior context matters; simple questions and read-only checks do not need history. Generated scripts live under <code>.hyperai/scripts/</code>, documentation under <code>.hyperai/docs/</code>, durable ownership metadata under <code>.hyperai/state/</code>, and volatile status, journals, pending transactions, and temporary files under the Git-ignored <code>.hyperai/runtime/</code>. Real source, content, and config stay in their normal project locations.</p>
+      <p class="note">Generated shared instructions, selected client configs, prompts, context, workpackages, decisions, and useful logs are intended for source control. Agent config files are written at the project-root paths where each external agent expects them. HyperAIStudio only writes configs for agents that are enabled and selected for generation. New projects keep Codex enabled by default and leave the other built-in agents off until the user enables them. Agent-specific actions live in the <code>Agents</code> tab, where users can enable/disable agents, regenerate files, open generated files, run visible install commands for missing CLIs or launchers in HyperAI Chat, add custom external agent routes, or copy a starter handoff prompt. Existing JSON client config files are merged when structurally valid. If a JSON config is malformed or incompatible, generation stops without modifying it; use version control to inspect or recover the file. Codex project TOML is updated only inside a delimited HyperAIStudio managed MCP block. Credentials, caches, volatile runtime status, binaries, and raw terminal dumps should not be committed.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Starter Instructions</h2>
+      <p>Paste this into your configured agent client after setup:</p>
+      <pre><code>My Unreal project is configured with HyperAIStudio. Read the generated instruction file supported by this client and use unreal-mcp for live Unreal Editor actions. If the editor is closed or disconnected, run .hyperai/scripts/Start-HyperAIStudioEditor.ps1 and wait for MCP readiness, even if native tools are not currently exposed. Missing native tools do not prove that the working directory is wrong. Only request an MCP reload or project-root reopen if the endpoint is ready and my task actually requires unavailable Unreal tools. Do not modify assets yet.</code></pre>
+    </section>
+
+    <section class="panel">
+      <h2>Daily Use</h2>
+      <h3>From the docked HyperAI Chat panel</h3>
+      <ul>
+        <li>Use <code>HyperAI Chat</code> for daily handoff: choose a configured agent, keep context on <code>Manual</code> unless you started from a context menu, then type in the embedded terminal or copy the prompt for manual paste.</li>
+        <li>Use the HyperAIStudio workbench tabs for setup, agent configuration, MCP profiles, generated files, prerequisites, and docs.</li>
+        <li>HyperAIStudio embeds a lightweight terminal launcher for terminal-capable agents, but does not interpret terminal output or own agent approvals/history. <code>Stop Agent</code> resets the current terminal session, and <code>Copy Prompt</code> remains available for manual paste fallback.</li>
+      </ul>
+      <h3>From the HyperAI Chat overlay</h3>
+      <ul>
+        <li>Open <code>Tools &gt; HyperAI Chat Overlay</code> for a temporary lightweight chat window without changing the editor layout.</li>
+        <li>Use the <code>Docs</code> tab in the HyperAIStudio panel for website docs, starter instructions, Epic MCP docs, troubleshooting, and MCP profile/provider shortcuts.</li>
+      </ul>
+      <h3>From editor context menus</h3>
+      <ul>
+        <li>Right-click selected Content Browser assets or selected level actors and choose <code>Open Codex With Selection</code> or <code>Open Claude Code With Selection</code>.</li>
+	        <li>Right-click selected Blueprint/PCG graph nodes and choose <code>Copy Selected Node Context</code> for a provider-neutral terminal/coding-agent handoff or <code>Smart Auto Comment Selected Nodes</code> for AI-assisted native comments. The local <code>Quick Auto Comment Selected Nodes</code> action can be enabled in HyperAIStudio settings and is hidden by default.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <h2>Prerequisites</h2>
+      <p>HyperAIStudio detects and explains the required Unreal-side plugins and common external tools. Install actions run visible commands in HyperAI Chat's embedded terminal after resetting any active agent session, and the command is copied as fallback.</p>
+      <ul>
+        <li>Unreal plugins: <code>ModelContextProtocol</code>, <code>ToolsetRegistry</code>, <code>EditorToolset</code>, <code>MCPClientToolset</code>, and <code>Terminal</code>.</li>
+        <li>Agent tools: Codex CLI, Claude Code CLI, Gemini CLI, Cursor launcher, and/or VS Code launcher with Copilot Agent mode. If an installer updates PATH and HyperAIStudio still shows Missing, restart Unreal Editor so the running editor process can see the new executable path.</li>
+        <li>Editor-agent docs: <a href="https://cursor.com/docs/mcp">Cursor MCP docs</a> and <a href="https://code.visualstudio.com/docs/agent-customization/mcp-servers">VS Code MCP docs</a>.</li>
+        <li>Community MCP and Gemini CLI support: Node.js 20+, npm, npx, Git, and optionally uv for Python-based MCP servers.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <h2>MCP Profiles</h2>
+      <p><code>unreal-mcp</code> is the single execution server for live Unreal Editor actions. HyperAIStudio discovers Epic's available toolsets at runtime and adds only independently validated gap or compound tools through Epic's supported Toolset Registry path. Extra community MCP servers can be imported or added in the <code>MCP</code> tab and exported to selected agent config files. HyperAIStudio does not proxy normal MCP traffic; the external agent chooses tools from the generated configuration and instructions.</p>
+      <ul>
+        <li>For HTTP/Streamable MCP entries, use <code>Test</code> to run a non-destructive initialize and <code>tools/list</code> check.</li>
+        <li>For command/stdio MCP entries, use <code>Test</code> to validate that the configured command exists on <code>PATH</code>. The external agent client still owns launching that server.</li>
+        <li>Use <code>Import Profile</code> to import a shareable <code>hyperai.mcp.v1</code> profile, or use <code>Add</code> / <code>Edit</code> for a local custom entry.</li>
+        <li>Imported profiles can include setup notes, install commands, documentation URLs, domains, and agent instructions. Secret environment values are not imported.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <h2>Safety And Limits</h2>
+      <ul>
+        <li>HyperAIStudio is editor-only and targets Unreal Engine 5.8.</li>
+        <li>Epic Unreal MCP is experimental and local HTTP/SSE only.</li>
+        <li>Do not expose the MCP endpoint beyond localhost.</li>
+        <li>Unreal MCP tool calls execute serially on the game thread, so agents should not issue overlapping editor tool calls.</li>
+        <li>HyperAIStudio does not provide licensing, accounts, cloud services, an execution bridge, or its own agent model/runtime. The retired Hyper UE TCP/stdio/HTTP runtime is never started or used as fallback.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <h2>Troubleshooting</h2>
+      <ul>
+        <li>If setup enabled plugins, restart Unreal Editor and run setup again.</li>
+        <li>If the editor crashes, run <code>.hyperai/scripts/Start-HyperAIStudioEditor.ps1</code> from the project root.</li>
+        <li>If MCP is not reachable, run <code>.hyperai/scripts/Wait-HyperAIStudioMCP.ps1 -TimeoutSeconds 90</code> and read <code>.hyperai/runtime/hyperai-status.json</code>.</li>
+        <li>If the endpoint is ready but the current agent client does not expose native Unreal tools, continue any work that does not need those tools. Reload MCP connections or reopen the project root only when the requested task requires them.</li>
+        <li>For protocol debugging, run <code>npx @modelcontextprotocol/inspector</code>, choose Streamable HTTP, and connect to <code>http://127.0.0.1:8000/mcp</code>.</li>
+      </ul>
+    </section>
+
+    <p class="note">Official Unreal MCP documentation: https://dev.epicgames.com/documentation/unreal-engine/unreal-mcp-in-unreal-editor</p>
+  </main>
+</body>
+</html>
