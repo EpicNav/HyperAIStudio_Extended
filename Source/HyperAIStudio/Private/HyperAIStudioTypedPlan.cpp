@@ -17,16 +17,12 @@ namespace HyperAIStudio::TypedPlan::Private
 	constexpr int32 MaxTypeIdChars = 96;
 	constexpr int32 MaxArgumentNameChars = 64;
 	constexpr int32 CompileNativeOperationsPerTarget = 1;
-	constexpr int32 CompileGameThreadMsPerTarget = 20;
 	constexpr int32 CompileOutputBytesPerTarget = 256;
 	constexpr int32 ValidateNativeOperationsPerTarget = 1;
-	constexpr int32 ValidateGameThreadMsPerTarget = 5;
 	constexpr int32 ValidateOutputBytesPerTarget = 512;
 	constexpr int32 SaveNativeOperationsPerTarget = 1;
-	constexpr int32 SaveGameThreadMsPerTarget = 10;
 	constexpr int32 SaveOutputBytesPerTarget = 256;
 	constexpr int32 VerifyFreshNativeOperationsPerTarget = 1;
-	constexpr int32 VerifyFreshGameThreadMsPerTarget = 5;
 	constexpr int32 VerifyFreshOutputBytesPerTarget = 512;
 	constexpr const TCHAR* FreshVerificationValidatorId = TEXT("hyperai.verify_fresh");
 	constexpr const TCHAR* FreshVerificationValidatorFingerprint = TEXT("sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
@@ -2131,10 +2127,10 @@ bool FHyperAIStudioTypedPlanValidator::ValidateJson(
 		+ static_cast<int64>(ValidateTargetCount) * ValidateNativeOperationsPerTarget
 		+ static_cast<int64>(SaveTargetCount) * SaveNativeOperationsPerTarget
 		+ static_cast<int64>(VerifyFreshTargetCount) * VerifyFreshNativeOperationsPerTarget;
-	TotalGameThreadMs += static_cast<int64>(CompileTargetCount) * CompileGameThreadMsPerTarget
-		+ static_cast<int64>(ValidateTargetCount) * ValidateGameThreadMsPerTarget
-		+ static_cast<int64>(SaveTargetCount) * SaveGameThreadMsPerTarget
-		+ static_cast<int64>(VerifyFreshTargetCount) * VerifyFreshGameThreadMsPerTarget;
+	TotalGameThreadMs += static_cast<int64>(CompileTargetCount) * OutPlan.FinalizerBudgets.CompileGameThreadMs
+		+ static_cast<int64>(ValidateTargetCount) * OutPlan.FinalizerBudgets.ValidateGameThreadMs
+		+ static_cast<int64>(SaveTargetCount) * OutPlan.FinalizerBudgets.SaveGameThreadMs
+		+ static_cast<int64>(VerifyFreshTargetCount) * OutPlan.FinalizerBudgets.VerifyFreshGameThreadMs;
 	TotalOutputBytes += static_cast<int64>(CompileTargetCount) * CompileOutputBytesPerTarget
 		+ static_cast<int64>(ValidateTargetCount) * ValidateOutputBytesPerTarget
 		+ static_cast<int64>(SaveTargetCount) * SaveOutputBytesPerTarget
@@ -2214,6 +2210,15 @@ FString FHyperAIStudioTypedPlanValidator::ComputeAuthorizationPlanHash(const FHy
 	AppendInt(Canonical, Plan.Budget.MaxNativeOperations);
 	AppendInt(Canonical, Plan.Budget.MaxGameThreadMs);
 	AppendInt(Canonical, Plan.Budget.MaxOutputBytes);
+	// Sealed only when raised, so every general plan keeps the hash it had before per-plan budgets existed.
+	if (!Plan.FinalizerBudgets.IsDefault())
+	{
+		AppendToken(Canonical, TEXT("finalizer-budgets"));
+		AppendInt(Canonical, Plan.FinalizerBudgets.CompileGameThreadMs);
+		AppendInt(Canonical, Plan.FinalizerBudgets.ValidateGameThreadMs);
+		AppendInt(Canonical, Plan.FinalizerBudgets.SaveGameThreadMs);
+		AppendInt(Canonical, Plan.FinalizerBudgets.VerifyFreshGameThreadMs);
+	}
 	AppendInt(Canonical, Plan.Steps.Num());
 
 	TArray<const FHyperAIStudioPlanStep*> CanonicalSteps;
@@ -2426,7 +2431,7 @@ bool FHyperAIStudioTypedPlanValidator::BuildDryRun(
 	{
 		const FHyperAIStudioPlanStepBudget Budget{
 			CompileTargets * HyperAIStudio::TypedPlan::Private::CompileNativeOperationsPerTarget,
-			CompileTargets * HyperAIStudio::TypedPlan::Private::CompileGameThreadMsPerTarget,
+			CompileTargets * Plan.FinalizerBudgets.CompileGameThreadMs,
 			CompileTargets * HyperAIStudio::TypedPlan::Private::CompileOutputBytesPerTarget};
 		OutResult.Schedule.Add({EHyperAIStudioPlanActionKind::CompileOnce, FString(), FString(), FString(), EHyperAIStudioPlanSafety::Edit, Budget});
 		OutResult.PlannedNativeOperationBudget += Budget.MaxNativeOperations;
@@ -2437,7 +2442,7 @@ bool FHyperAIStudioTypedPlanValidator::BuildDryRun(
 	{
 		const FHyperAIStudioPlanStepBudget Budget{
 			ValidateTargets * HyperAIStudio::TypedPlan::Private::ValidateNativeOperationsPerTarget,
-			ValidateTargets * HyperAIStudio::TypedPlan::Private::ValidateGameThreadMsPerTarget,
+			ValidateTargets * Plan.FinalizerBudgets.ValidateGameThreadMs,
 			ValidateTargets * HyperAIStudio::TypedPlan::Private::ValidateOutputBytesPerTarget};
 		OutResult.Schedule.Add({EHyperAIStudioPlanActionKind::ValidateOnce, FString(), FString(), FString(), EHyperAIStudioPlanSafety::Read, Budget});
 		OutResult.PlannedNativeOperationBudget += Budget.MaxNativeOperations;
@@ -2448,7 +2453,7 @@ bool FHyperAIStudioTypedPlanValidator::BuildDryRun(
 	{
 		const FHyperAIStudioPlanStepBudget Budget{
 			SaveTargets * HyperAIStudio::TypedPlan::Private::SaveNativeOperationsPerTarget,
-			SaveTargets * HyperAIStudio::TypedPlan::Private::SaveGameThreadMsPerTarget,
+			SaveTargets * Plan.FinalizerBudgets.SaveGameThreadMs,
 			SaveTargets * HyperAIStudio::TypedPlan::Private::SaveOutputBytesPerTarget};
 		OutResult.Schedule.Add({EHyperAIStudioPlanActionKind::SaveOnce, FString(), FString(), FString(), EHyperAIStudioPlanSafety::Edit, Budget});
 		OutResult.PlannedNativeOperationBudget += Budget.MaxNativeOperations;
@@ -2459,7 +2464,7 @@ bool FHyperAIStudioTypedPlanValidator::BuildDryRun(
 	{
 		const FHyperAIStudioPlanStepBudget Budget{
 			VerifyFreshTargets * HyperAIStudio::TypedPlan::Private::VerifyFreshNativeOperationsPerTarget,
-			VerifyFreshTargets * HyperAIStudio::TypedPlan::Private::VerifyFreshGameThreadMsPerTarget,
+			VerifyFreshTargets * Plan.FinalizerBudgets.VerifyFreshGameThreadMs,
 			VerifyFreshTargets * HyperAIStudio::TypedPlan::Private::VerifyFreshOutputBytesPerTarget};
 		OutResult.Schedule.Add({EHyperAIStudioPlanActionKind::VerifyFreshOnce, FString(), FString(), FString(), EHyperAIStudioPlanSafety::Read, Budget});
 		OutResult.PlannedNativeOperationBudget += Budget.MaxNativeOperations;

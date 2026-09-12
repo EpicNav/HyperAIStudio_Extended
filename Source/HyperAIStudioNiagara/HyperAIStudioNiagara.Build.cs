@@ -14,10 +14,12 @@ public class HyperAIStudioNiagara : ModuleRules
 			"CoreUObject",
 			"Engine",
 			"AssetRegistry",
+			"AssetTools",
 			"HyperAIStudio",
 			"Niagara",
 			"NiagaraEditor",
-			"ToolsetRegistry"
+			"ToolsetRegistry",
+			"UnrealEd"
 		});
 	}
 }

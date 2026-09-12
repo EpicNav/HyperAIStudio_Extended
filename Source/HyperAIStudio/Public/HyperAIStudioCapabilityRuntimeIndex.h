@@ -28,7 +28,8 @@ struct HYPERAISTUDIO_API FHyperAIStudioRuntimeToolBinding
 class HYPERAISTUDIO_API FHyperAIStudioCapabilityRuntimeIndex final
 {
 public:
-	static constexpr int32 MaxRuntimeToolBindings = 109;
+	// The generated catalog's 109 tools plus the three-tool texture_graph cohort.
+	static constexpr int32 MaxRuntimeToolBindings = 112;
 	static constexpr int32 MaxDiagnostics = 32;
 
 	/**

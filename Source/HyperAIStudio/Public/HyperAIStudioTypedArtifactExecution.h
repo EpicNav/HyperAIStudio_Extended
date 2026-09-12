@@ -13,6 +13,17 @@ struct FHyperAIStudioTypedArtifactLimits
 	/** This synchronous core slice is deliberately not a long/awaiting workflow host. */
 	static constexpr int32 MaxSynchronousDeadlineMs = 2000;
 	static constexpr int32 MaxSynchronousGameThreadMs = 250;
+	/**
+	 * A typed-artifact mutation runs one phase per tick, so these bound the whole operation rather than one blocking
+	 * call; the synchronous limits above still bound read tools. Measured on a 1.2 MB Niagara System: apply 400 ms,
+	 * compile request 66 ms, package save 646 ms. Save cost grows with asset size, hence the headroom.
+	 */
+	static constexpr int32 MaxArtifactDeadlineMs = 15000;
+	static constexpr int32 MaxArtifactGameThreadMs = 5000;
+	static constexpr int32 CompileGameThreadMs = 250;
+	static constexpr int32 ValidateGameThreadMs = 250;
+	static constexpr int32 SaveGameThreadMs = 2000;
+	static constexpr int32 VerifyFreshGameThreadMs = 100;
 	static constexpr int32 MaxEffectTargetChars = 512;
 	static constexpr int32 MaxDiagnosticChars = 2048;
 };

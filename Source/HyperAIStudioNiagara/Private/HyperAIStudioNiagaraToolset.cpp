@@ -8,6 +8,8 @@
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_Niagara.h"
 #include "Engine/Engine.h"
+#include "FileHelpers.h"
+#include "HyperAIStudioNiagaraExternalEditGate.h"
 #include "HyperAIStudioCapabilityRuntimeIndex.h"
 #include "HyperAIStudioExtensionRuntime.h"
 #include "IO/IoHash.h"
@@ -165,9 +167,14 @@ namespace HyperAIStudio::Niagara::Private
 
 	int32 EstimateIssueBytes(const FHyperAINiagaraIssue& Issue)
 	{
-		return 256 + 2 * (Issue.Code.Len() + Issue.Severity.Len() + Issue.StableId.Len()
+		int32 Size = 256 + 2 * (Issue.Code.Len() + Issue.Severity.Len() + Issue.StableId.Len()
 			+ Issue.RuleClass.Len() + Issue.SourcePath.Len() + Issue.Summary.Len()
 			+ Issue.Description.Len());
+		for (const FString& FixId : Issue.FixIds)
+		{
+			Size += 16 + 2 * FixId.Len();
+		}
+		return Size;
 	}
 
 	int32 EstimateParameterBytes(const FHyperAINiagaraUserParameterIdentity& Parameter)
@@ -384,182 +391,152 @@ namespace HyperAIStudio::Niagara::Private
 		return true;
 	}
 
-	bool IsNativeValidationRuleClass(const UClass* Class)
+	int32 EstimateTopologyBytes(const FHyperAINiagaraEmitterTopology& Emitter)
 	{
-		static const TSet<const UClass*> Allowed = {
-			UNiagaraValidationRule_NoWarmupTime::StaticClass(),
-			UNiagaraValidationRule_NoEvents::StaticClass(),
-			UNiagaraValidationRule_FixedGPUBoundsSet::StaticClass(),
-			UNiagaraValidationRule_EmitterCount::StaticClass(),
-			UNiagaraValidationRule_RendererCount::StaticClass(),
-			UNiagaraValidationRule_BannedRenderers::StaticClass(),
-			UNiagaraValidationRule_Lightweight::StaticClass(),
-			UNiagaraValidationRule_BannedModules::StaticClass(),
-			UNiagaraValidationRule_BannedDataInterfaces::StaticClass(),
-			UNiagaraValidationRule_RendererSortingEnabled::StaticClass(),
-			UNiagaraValidationRule_GpuUsage::StaticClass(),
-			UNiagaraValidationRule_RibbonRenderer::StaticClass(),
-			UNiagaraValidationRule_InvalidEffectType::StaticClass(),
-			UNiagaraValidationRule_HasEffectType::StaticClass(),
-			UNiagaraValidationRule_LWC::StaticClass(),
-			UNiagaraValidationRule_NoOpaqueRenderMaterial::StaticClass(),
-			UNiagaraValidationRule_NoFixedDeltaTime::StaticClass(),
-			UNiagaraValidationRule_SimulationStageBudget::StaticClass(),
-			UNiagaraValidationRule_TickDependencyCheck::StaticClass(),
-			UNiagaraValidationRule_UserDataInterfaces::StaticClass(),
-			UNiagaraValidationRule_SingletonModule::StaticClass(),
-			UNiagaraValidationRule_NoMapForOnCpu::StaticClass(),
-			UNiagaraValidationRule_ModuleSimTargetRestriction::StaticClass(),
-			UNiagaraValidationRule_MaterialUsage::StaticClass(),
-			UNiagaraValidationRule_RequireLatestParentEmitterVersion::StaticClass(),
-			UNiagaraValidationRule_RequireParentEmitter::StaticClass()};
-		return Class && Allowed.Contains(Class);
-	}
-
-	bool AddStackEntriesBounded(
-		UNiagaraStackViewModel* StackViewModel,
-		TSet<UNiagaraStackEntry*>& Seen,
-		TArray<UNiagaraStackModuleItem*>& OutModules)
-	{
-		if (!StackViewModel || !StackViewModel->GetRootEntry())
+		int64 Size = 128 + 2ll * (Emitter.EmitterName.Len() + Emitter.SimTarget.Len());
+		for (const FHyperAINiagaraScriptStackTopology& Stack : Emitter.ScriptStacks)
 		{
-			return false;
-		}
-		TArray<UNiagaraStackEntry*> Pending{StackViewModel->GetRootEntry()};
-		while (!Pending.IsEmpty())
-		{
-			UNiagaraStackEntry* Entry = Pending.Pop(EAllowShrinking::No);
-			if (!Entry || Seen.Contains(Entry))
+			Size += 64 + 2ll * Stack.ScriptName.Len();
+			for (const FHyperAINiagaraModuleTopology& Module : Stack.Modules)
 			{
-				continue;
-			}
-			if (Seen.Num() >= FHyperAIStudioNiagaraContracts::MaxStackEntries)
-			{
-				return false;
-			}
-			Seen.Add(Entry);
-			if (UNiagaraStackModuleItem* Module = Cast<UNiagaraStackModuleItem>(Entry))
-			{
-				OutModules.Add(Module);
-			}
-			TArray<UNiagaraStackEntry*> Children;
-			Entry->GetUnfilteredChildren(Children);
-			if (Pending.Num() > FHyperAIStudioNiagaraContracts::MaxStackEntries - Seen.Num()
-				|| Children.Num() > FHyperAIStudioNiagaraContracts::MaxStackEntries
-					- Seen.Num() - Pending.Num())
-			{
-				return false;
-			}
-			Pending.Append(Children);
-		}
-		return true;
-	}
-
-	bool NativeValidationTraversalWithinBounds(UNiagaraSystem& System)
-	{
-		const TArray<FNiagaraEmitterHandle>& Handles = System.GetEmitterHandles();
-		if (Handles.Num() > FHyperAIStudioNiagaraContracts::MaxEmitters)
-		{
-			return false;
-		}
-		int32 VersionCount = 0;
-		int32 RendererCount = 0;
-		int32 SimulationStageCount = 0;
-		int32 EventHandlerCount = 0;
-		TSet<const UNiagaraEmitter*> SeenEmitters;
-		for (const FNiagaraEmitterHandle& Handle : Handles)
-		{
-			const FVersionedNiagaraEmitter Instance = Handle.GetInstance();
-			const UNiagaraEmitter* Emitter = Instance.Emitter;
-			if (!Emitter)
-			{
-				return false;
-			}
-			if (SeenEmitters.Contains(Emitter))
-			{
-				continue;
-			}
-			SeenEmitters.Add(Emitter);
-			const TArray<FNiagaraAssetVersion> Versions = Emitter->GetAllAvailableVersions();
-			if (Versions.Num() > FHyperAIStudioNiagaraContracts::MaxEmitterVersions
-				- VersionCount)
-			{
-				return false;
-			}
-			VersionCount += Versions.Num();
-			for (const FNiagaraAssetVersion& Version : Versions)
-			{
-				const FVersionedNiagaraEmitterData* Data =
-					Emitter->GetEmitterData(Version.VersionGuid);
-				if (!Data
-					|| Data->GetRenderers().Num()
-						> FHyperAIStudioNiagaraContracts::MaxRenderers - RendererCount
-					|| Data->GetSimulationStages().Num()
-						> FHyperAIStudioNiagaraContracts::MaxSimulationStages
-							- SimulationStageCount
-					|| Data->GetEventHandlers().Num()
-						> FHyperAIStudioNiagaraContracts::MaxScripts - EventHandlerCount)
+				Size += 96 + 2ll * (Module.ModuleName.Len() + Module.ScriptAssetPath.Len());
+				for (const FString& Input : Module.InputNames)
 				{
-					return false;
-				}
-				RendererCount += Data->GetRenderers().Num();
-				SimulationStageCount += Data->GetSimulationStages().Num();
-				EventHandlerCount += Data->GetEventHandlers().Num();
-			}
-		}
-		return true;
-	}
-
-	bool GraphContainsParameterName(
-		const TArray<UNiagaraGraph*>& Graphs,
-		const FString& Name,
-		bool& bOutFound)
-	{
-		bOutFound = false;
-		const FName TargetName(*Name);
-		static const FName ParameterPinSubCategory(TEXT("ParameterPin"));
-		for (const UNiagaraGraph* Graph : Graphs)
-		{
-			if (!Graph)
-			{
-				continue;
-			}
-			for (const TPair<FNiagaraVariable, TObjectPtr<UNiagaraScriptVariable>>& Pair : Graph->GetAllMetaData())
-			{
-				if (Pair.Key.GetName() == TargetName)
-				{
-					bOutFound = true;
-					return true;
-				}
-			}
-			for (const UEdGraphNode* Node : Graph->Nodes)
-			{
-				if (!Node)
-				{
-					continue;
-				}
-				for (const UEdGraphPin* Pin : Node->Pins)
-				{
-					if (Pin && Pin->PinType.PinSubCategory == ParameterPinSubCategory
-						&& UEdGraphSchema_Niagara::PinToNiagaraVariable(Pin).GetName() == TargetName)
-					{
-						bOutFound = true;
-						return true;
-					}
+					Size += 16 + 2ll * Input.Len();
 				}
 			}
 		}
-		return true;
+		for (const FHyperAINiagaraRendererTopology& Renderer : Emitter.Renderers)
+		{
+			Size += 48 + 2ll * Renderer.RendererClassPath.Len();
+		}
+		return static_cast<int32>(FMath::Min<int64>(Size, MAX_int32));
 	}
 
-	const FHyperAINiagaraUserParameterIdentity* FindParameterByGuid(
-		const TArray<FHyperAINiagaraUserParameterIdentity>& Parameters,
-		const FString& Guid)
+	/** Hash of saved package identity plus dirty state: stable across async compile completion. */
+	FString ContentKeyOf(const UNiagaraSystem& System)
 	{
-		return Parameters.FindByPredicate([&Guid](const FHyperAINiagaraUserParameterIdentity& Item)
+		const UPackage* Package = System.GetOutermost();
+		FString Canonical;
+		AppendToken(Canonical, TEXT("hyperai.niagara.content-key.v1"));
+		AppendToken(Canonical, System.GetPathName());
+		AppendToken(Canonical, Package ? LexToString(Package->GetSavedHash()) : FString());
+		AppendToken(Canonical, Package && Package->IsDirty() ? TEXT("dirty") : TEXT("clean"));
+		return FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(Canonical);
+	}
+
+	/**
+	 * One typed-executor phase. Order is fixed by the core plan: Apply, Compile, Validate, Save, VerifyFresh.
+	 * Any failure after Apply reports FailedAfterKnownEffect: the edit is in memory and undoable, not rolled back.
+	 */
+	FHyperAIStudioDomainAdapterResult ExecuteEditPhase(
+		const EHyperAIStudioDomainExecutionActionKind Phase,
+		const FHyperAIStudioNiagaraEditOpsPayload& Payload)
+	{
+		namespace Gate = HyperAIStudio::Niagara::ExternalEditGate;
+		FHyperAIStudioDomainAdapterResult Result;
+		const double PhaseStarted = FPlatformTime::Seconds();
+		auto Finish = [&](const EHyperAIStudioDomainDispatchOutcome Outcome, const FString& Status,
+			const FString& Diagnostic, const TCHAR* ResultPhase = nullptr, const FString& ContentKey = FString())
 		{
-			return Item.VariableGuid == Guid;
-		});
+			// The executor enforces measured per-phase game-thread budgets; this shows which phase costs what.
+			UE_LOG(LogHyperAIStudioNiagara, Log, TEXT("Edit phase %d finished %s in %.1f ms. %s"),
+				static_cast<int32>(Phase), *Status, (FPlatformTime::Seconds() - PhaseStarted) * 1000.0, *Diagnostic);
+			Result.Outcome = Outcome;
+			Result.StatusCode = Status.Left(FHyperAIStudioDomainLimits::MaxStatusCodeChars);
+			Result.Diagnostic = Diagnostic.Left(FHyperAIStudioDomainLimits::MaxDiagnosticChars);
+			if (Outcome == EHyperAIStudioDomainDispatchOutcome::Succeeded)
+			{
+				const TSharedRef<FHyperAIStudioNiagaraMutationResultPayload, ESPMode::ThreadSafe> Output =
+					MakeShared<FHyperAIStudioNiagaraMutationResultPayload, ESPMode::ThreadSafe>();
+				Output->Phase = ResultPhase;
+				Output->Revision = ContentKey;
+				Output->bValid = true;
+				Result.Payload = Output;
+			}
+			return Result;
+		};
+		const bool bApply = Phase == EHyperAIStudioDomainExecutionActionKind::Apply;
+		const EHyperAIStudioDomainDispatchOutcome FailedOutcome = bApply
+			? EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect
+			: EHyperAIStudioDomainDispatchOutcome::FailedAfterKnownEffect;
+		if (!IsInGameThread())
+		{
+			return Finish(FailedOutcome, TEXT("game_thread_required"), TEXT("Niagara edits run on the game thread."));
+		}
+		UNiagaraSystem* System = Cast<UNiagaraSystem>(FSoftObjectPath(Payload.TargetPath).ResolveObject());
+		if (!System)
+		{
+			return Finish(FailedOutcome, TEXT("target_not_loaded"), TEXT("The target System is no longer loaded."));
+		}
+
+		switch (Phase)
+		{
+		case EHyperAIStudioDomainExecutionActionKind::Apply:
+		{
+			FHyperAIStudioNiagaraValueSnapshot Snapshot;
+			FString Status;
+			FString Diagnostic;
+			if (!FHyperAIStudioNiagaraContracts::CaptureExact(Payload.TargetPath,
+				FHyperAIStudioNiagaraContracts::MaxReadGameThreadMs, Snapshot, Status, Diagnostic)
+				|| Snapshot.Health.Revision != Payload.BaseRevision)
+			{
+				return Finish(EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect, TEXT("stale_revision"),
+					TEXT("The System changed after planning; nothing was applied."));
+			}
+			if (GetExistingSystemViewModel(System).IsValid())
+			{
+				return Finish(EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect, TEXT("target_open_in_editor"),
+					TEXT("The System was opened in the Niagara editor after planning; nothing was applied."));
+			}
+			int32 Applied = 0;
+			TArray<FString> PerOpStatus;
+			FString Error;
+			if (!Gate::ApplyOps(*System, Payload.Ops, Applied, PerOpStatus, Error))
+			{
+				return Finish(Applied > 0
+					? EHyperAIStudioDomainDispatchOutcome::FailedAfterKnownEffect
+					: EHyperAIStudioDomainDispatchOutcome::FailedBeforeEffect,
+					TEXT("edit_op_failed"), Error);
+			}
+			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("applied"),
+				FString::Join(PerOpStatus, TEXT(", ")), TEXT("applied"));
+		}
+		case EHyperAIStudioDomainExecutionActionKind::Compile:
+			// Never wait: compilation can take seconds against a 250 ms phase budget. It finishes on later ticks.
+			System->RequestCompile(/*bForce=*/false);
+			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("compile_requested"),
+				TEXT("Compile requested; it finishes asynchronously."), TEXT("compile_requested"));
+		case EHyperAIStudioDomainExecutionActionKind::Validate:
+		{
+			// Every Niagara edit queues a compile, and Epic refuses to read stack issues until it finishes, which can
+			// take seconds. So this phase proves the edited System still captures structurally; stack issues and
+			// compile results come from hyper_niagara_validate once compiling settles.
+			FHyperAIStudioNiagaraValueSnapshot Snapshot;
+			FString Status;
+			FString Diagnostic;
+			if (!FHyperAIStudioNiagaraContracts::CaptureExact(Payload.TargetPath,
+				FHyperAIStudioNiagaraContracts::MaxReadGameThreadMs, Snapshot, Status, Diagnostic))
+			{
+				return Finish(EHyperAIStudioDomainDispatchOutcome::FailedAfterKnownEffect, Status,
+					TEXT("The edited System no longer captures and was not saved; undo reverts it. ") + Diagnostic);
+			}
+			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("validated"),
+				TEXT("Structure captured. Run hyper_niagara_validate after compiling finishes for stack issues."), TEXT("validated"));
+		}
+		case EHyperAIStudioDomainExecutionActionKind::Save:
+			if (!UEditorLoadingAndSavingUtils::SavePackages({System->GetOutermost()}, /*bOnlyDirty=*/false))
+			{
+				return Finish(EHyperAIStudioDomainDispatchOutcome::FailedAfterKnownEffect, TEXT("save_failed"),
+					TEXT("The edit applied but the package did not save; it remains in memory and can be undone."));
+			}
+			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("saved"), TEXT("Package saved."), TEXT("saved"));
+		case EHyperAIStudioDomainExecutionActionKind::VerifyFresh:
+			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("fresh_captured"),
+				TEXT("Fresh content captured for verification."), TEXT("completed"), ContentKeyOf(*System));
+		default:
+			return Finish(FailedOutcome, TEXT("unsupported_phase"), TEXT("Unknown execution phase."));
+		}
 	}
 
 	bool ParseCursor(
@@ -688,67 +665,6 @@ bool FHyperAIStudioNiagaraContracts::IsUserParameterName(const FString& Name)
 		&& !HyperAIStudio::Niagara::Private::HasControlCharacter(Name);
 }
 
-bool FHyperAIStudioNiagaraContracts::ValidateRenameIdentityAgainstSnapshot(
-	const TArray<FHyperAINiagaraUserParameterIdentity>& Parameters,
-	const FHyperAINiagaraUserParameterRename& Rename,
-	const FHyperAINiagaraUserParameterIdentity*& OutParameter,
-	FString& OutError)
-{
-	using namespace HyperAIStudio::Niagara::Private;
-	OutParameter = nullptr;
-	OutError.Reset();
-	FGuid ExpectedGuid;
-	if (!IsUserParameterName(Rename.OldName) || !IsUserParameterName(Rename.NewName)
-		|| Rename.OldName == Rename.NewName
-		|| !IsCanonicalSha256(Rename.ExpectedTypeFingerprint)
-		|| !FGuid::ParseExact(Rename.ExpectedVariableGuid,
-			EGuidFormats::DigitsWithHyphensLower, ExpectedGuid)
-		|| !ExpectedGuid.IsValid()
-		|| CanonicalGuid(ExpectedGuid) != Rename.ExpectedVariableGuid)
-	{
-		OutError = TEXT("invalid_rename_identity");
-		return false;
-	}
-	OutParameter = FindParameterByGuid(Parameters, Rename.ExpectedVariableGuid);
-	if (!OutParameter)
-	{
-		OutError = TEXT("variable_guid_not_found");
-		return false;
-	}
-	if (OutParameter->Name != Rename.OldName
-		|| OutParameter->TypeFingerprint != Rename.ExpectedTypeFingerprint)
-	{
-		OutError = TEXT("variable_identity_mismatch");
-		OutParameter = nullptr;
-		return false;
-	}
-	if (Parameters.ContainsByPredicate([&](const FHyperAINiagaraUserParameterIdentity& Item)
-		{
-			return Item.Name == Rename.NewName;
-		}))
-	{
-		OutError = TEXT("destination_parameter_exists");
-		OutParameter = nullptr;
-		return false;
-	}
-	return true;
-}
-
-bool FHyperAIStudioNiagaraContracts::AreFullReferenceDomainsProven(
-	const bool bExposedStore,
-	const bool bGraphMetadataAndPins,
-	const bool bEditorOnlyParameterAdapter,
-	const bool bUserParameterBindings,
-	const bool bRendererAttributeBindings,
-	const bool bSystemEmitterHandleRenameClosure,
-	const bool bReflectionAndCollectionsBoundedBeforeMaterialization)
-{
-	return bExposedStore && bGraphMetadataAndPins && bEditorOnlyParameterAdapter
-		&& bUserParameterBindings && bRendererAttributeBindings
-		&& bSystemEmitterHandleRenameClosure
-		&& bReflectionAndCollectionsBoundedBeforeMaterialization;
-}
-
 FString FHyperAIStudioNiagaraContracts::ClassifyAssetRegistryExistence(
 	UE::AssetRegistry::EExists State)
 {
@@ -763,14 +679,14 @@ FString FHyperAIStudioNiagaraContracts::ClassifyAssetRegistryExistence(
 FString FHyperAIStudioNiagaraContracts::InspectPayloadSchemaFingerprint()
 {
 	static const FString Value = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(
-		TEXT("niagara.inspect.payload.v1|exact_loaded_target|page_size|revision_cursor|work_ms|output_bytes"));
+		TEXT("niagara.inspect.payload.v2|exact_loaded_target|include_topology|page_size|revision_cursor|work_ms|output_bytes"));
 	return Value;
 }
 
-FString FHyperAIStudioNiagaraContracts::RenamePayloadSchemaFingerprint()
+FString FHyperAIStudioNiagaraContracts::EditOpsPayloadSchemaFingerprint()
 {
 	static const FString Value = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(
-		TEXT("niagara.rename.payload.v1|one_target|base_revision|guid|old_name|new_name|type|default|deep_clone|bounded"));
+		TEXT("niagara.edit_ops.payload.v2|one_target|base_revision|ordered_closed_ops|compile|save|deep_clone|bounded"));
 	return Value;
 }
 
@@ -784,35 +700,22 @@ FString FHyperAIStudioNiagaraContracts::ValidatePayloadSchemaFingerprint()
 FString FHyperAIStudioNiagaraContracts::InspectResultSchemaFingerprint()
 {
 	static const FString Value = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(
-		TEXT("niagara.inspect.result.v1|health|revision|parameter_identity_page|capabilities|issues|bounded"));
+		TEXT("niagara.inspect.result.v2|health|revision|parameter_identity_page|emitter_topology|capabilities|issues|bounded"));
 	return Value;
 }
 
 FString FHyperAIStudioNiagaraContracts::MutationResultSchemaFingerprint()
 {
 	static const FString Value = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(
-		TEXT("niagara.rename.result.v1|phase|revision|valid|bounded"));
+		TEXT("niagara.edit_ops.result.v1|phase|content_key|valid|bounded"));
 	return Value;
 }
 
 FString FHyperAIStudioNiagaraContracts::ValidateResultSchemaFingerprint()
 {
 	static const FString Value = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(
-		TEXT("niagara.validate.result.v1|complete|valid|policy|revision|native_rule_issues|counts|bounded"));
+		TEXT("niagara.validate.result.v2|complete|valid|policy|revision|compile_state|stack_issues_with_fixes|counts|bounded"));
 	return Value;
-}
-
-const UNiagaraValidationRuleSet* FHyperAIStudioNiagaraContracts::ResolveAlreadyLoadedRuleSet(
-	const TSoftObjectPtr<UNiagaraValidationRuleSet>& RuleSet)
-{
-	// TSoftObjectPtr::Get is lookup-only. This seam has no blocking-load,
-	// streaming, asset-tool, or editor-open fallback.
-	return RuleSet.Get();
-}
-
-bool FHyperAIStudioNiagaraContracts::IsSealedNativeValidationRuleClass(const UClass* Class)
-{
-	return HyperAIStudio::Niagara::Private::IsNativeValidationRuleClass(Class);
 }
 
 FString FHyperAIStudioNiagaraInspectPayload::GetTypeId() const
@@ -848,42 +751,47 @@ int32 FHyperAIStudioNiagaraValidatePayload::GetBoundedByteSize() const
 	return static_cast<int32>(FMath::Min<int64>(Size, MAX_int32));
 }
 
-FString FHyperAIStudioNiagaraRenamePayload::GetTypeId() const
+FString FHyperAIStudioNiagaraEditOpsPayload::GetTypeId() const
 {
-	return FHyperAIStudioNiagaraContracts::RenamePayloadTypeId;
+	return FHyperAIStudioNiagaraContracts::EditOpsPayloadTypeId;
 }
 
-FString FHyperAIStudioNiagaraRenamePayload::GetSchemaFingerprint() const
+FString FHyperAIStudioNiagaraEditOpsPayload::GetSchemaFingerprint() const
 {
-	return FHyperAIStudioNiagaraContracts::RenamePayloadSchemaFingerprint();
+	return FHyperAIStudioNiagaraContracts::EditOpsPayloadSchemaFingerprint();
 }
 
-int32 FHyperAIStudioNiagaraRenamePayload::GetBoundedByteSize() const
+int32 FHyperAIStudioNiagaraEditOpsPayload::GetBoundedByteSize() const
 {
-	const int64 Size = 256 + 2ll * TargetPath.Len() + 2ll * BaseRevision.Len()
-		+ 2ll * ExpectedVariableGuid.Len() + 2ll * OldName.Len() + 2ll * NewName.Len()
-		+ 2ll * TypeFingerprint.Len() + 2ll * DefaultFingerprint.Len()
-		+ 2ll * SemanticFingerprint.Len();
+	int64 Size = 256 + 2ll * (TargetPath.Len() + BaseRevision.Len() + SemanticFingerprint.Len());
+	for (const FHyperAINiagaraEditOp& Op : Ops)
+	{
+		Size += 64 + 2ll * (Op.Kind.Len() + Op.EmitterName.Len() + Op.ScriptName.Len() + Op.ModuleName.Len()
+			+ Op.AssetPath.Len() + Op.Name.Len() + Op.ValueType.Len() + Op.Value.Len()
+			+ Op.IssueId.Len() + Op.FixId.Len());
+		for (const FString& InputName : Op.InputNameStack)
+		{
+			Size += 16 + 2ll * InputName.Len();
+		}
+	}
 	return static_cast<int32>(FMath::Min<int64>(Size, MAX_int32));
 }
 
-FString FHyperAIStudioNiagaraRenamePayload::GetSemanticFingerprint() const
+FString FHyperAIStudioNiagaraEditOpsPayload::GetSemanticFingerprint() const
 {
 	return SemanticFingerprint;
 }
 
 TSharedRef<const IHyperAIStudioTypedArtifactPayload, ESPMode::ThreadSafe>
-FHyperAIStudioNiagaraRenamePayload::CloneImmutable() const
+FHyperAIStudioNiagaraEditOpsPayload::CloneImmutable() const
 {
-	const TSharedRef<FHyperAIStudioNiagaraRenamePayload, ESPMode::ThreadSafe> Clone =
-		MakeShared<FHyperAIStudioNiagaraRenamePayload, ESPMode::ThreadSafe>();
+	const TSharedRef<FHyperAIStudioNiagaraEditOpsPayload, ESPMode::ThreadSafe> Clone =
+		MakeShared<FHyperAIStudioNiagaraEditOpsPayload, ESPMode::ThreadSafe>();
 	Clone->TargetPath = TargetPath;
 	Clone->BaseRevision = BaseRevision;
-	Clone->ExpectedVariableGuid = ExpectedVariableGuid;
-	Clone->OldName = OldName;
-	Clone->NewName = NewName;
-	Clone->TypeFingerprint = TypeFingerprint;
-	Clone->DefaultFingerprint = DefaultFingerprint;
+	Clone->Ops = Ops;
+	Clone->bCompile = bCompile;
+	Clone->bSave = bSave;
 	Clone->SemanticFingerprint = SemanticFingerprint;
 	return Clone;
 }
@@ -907,6 +815,10 @@ int32 FHyperAIStudioNiagaraInspectResultPayload::GetBoundedByteSize() const
 	for (const FHyperAINiagaraUserParameterIdentity& Parameter : Report.UserParameters)
 	{
 		Size += HyperAIStudio::Niagara::Private::EstimateParameterBytes(Parameter);
+	}
+	for (const FHyperAINiagaraEmitterTopology& Emitter : Report.Emitters)
+	{
+		Size += HyperAIStudio::Niagara::Private::EstimateTopologyBytes(Emitter);
 	}
 	for (const FHyperAINiagaraIssue& Issue : Report.Issues)
 	{
@@ -956,13 +868,17 @@ int32 FHyperAIStudioNiagaraMutationResultPayload::GetBoundedByteSize() const
 TArray<FHyperAINiagaraCapabilityStatus> FHyperAIStudioNiagaraContracts::GetCapabilityMatrix()
 {
 	FHyperAINiagaraCapabilityStatus Niagara;
-	Niagara.bIndependentValidationImplemented = false;
+	Niagara.bIndependentValidationImplemented = true;
+	Niagara.bMutationExecutionImplemented = true;
 	Niagara.SupportedCases = {
 		TEXT("exact_loaded_system_health_and_complete_cas"),
 		TEXT("paged_stable_user_parameter_identity_tokens"),
-		TEXT("source_candidate_loaded_native_validation_without_soft_loads"),
-		TEXT("single_user_parameter_rename_partial_preflight"),
-		TEXT("typed_async_mutation_contract_without_sync_execution")};
+		TEXT("emitter_script_module_input_renderer_topology"),
+		TEXT("compile_state_and_stack_issues_with_fix_ids"),
+		TEXT("batched_edit_ops_one_undo_step"),
+		TEXT("journaled_apply_compile_validate_save_fresh_verify")};
+	// Epic's NiagaraToolsets expose these as single calls. apply_plan adds batching, a revision check, one undo
+	// step, and a durable journal on top of the same engine API; it does not replace them.
 	Niagara.DelegatedEpicCallables = {
 		TEXT("GetAssetDiscoveryInfo"), TEXT("FindNiagaraScripts"),
 		TEXT("GetNiagaraScriptDigest"), TEXT("ConstructNiagaraBPWrapperFromSystem"),
@@ -989,23 +905,20 @@ TArray<FHyperAINiagaraCapabilityStatus> FHyperAIStudioNiagaraContracts::GetCapab
 		TEXT("GetSystemCompileState"), TEXT("GetStackIssues"),
 		TEXT("ApplyStackIssueFix")};
 	Niagara.UnsupportedCases = {
-		TEXT("target_load_or_editor_open"),
+		TEXT("target_open_in_niagara_editor"),
+		TEXT("destructive_removal_ops_until_server_grant_path_is_exercised"),
+		TEXT("opaque_system_emitter_renderer_property_json"),
 		TEXT("raw_hlsl_python_lua_or_script_text"),
 		TEXT("scratchpad_authoring"),
-		TEXT("stateless_emitter_authoring_that_tryloads_default_material"),
-		TEXT("stateless_emitter_complete_cas_or_native_validation"),
 		TEXT("module_reorder_through_unexported_editor_api"),
 		TEXT("event_or_simulation_stage_or_version_authoring"),
 		TEXT("data_channel_creation_without_closed_public_api"),
-		TEXT("arbitrary_validation_fix_delegate_execution"),
-		TEXT("custom_validation_rule_execution"),
-		TEXT("native_rule_execution_not_hard_bounded"),
-		TEXT("full_reference_inventory_incomplete"),
+		TEXT("link_style_stack_issue_fixes"),
 		TEXT("broad_asset_scan_capture_or_dependency_walk"),
 		TEXT("runtime_simulation_screenshot_or_actor_spawn"),
 		TEXT("generic_reflection_property_dispatch")};
-	Niagara.State = TEXT("source_candidate_full_reference_inventory_incomplete_native_rule_execution_not_hard_bounded_async_host_required");
-	Niagara.Remediation = TEXT("Use Epic NiagaraToolsets for delegated primitives. Rename dry-run remains blocked until a bounded immutable inventory covers editor-only parameters, user bindings, renderer attribute bindings, and system/emitter rename closure before any reflection result is materialized. Loaded native validation stays dev-only until closed value-snapshot analyzers replace virtual rule execution. Mutation execution also requires the shared pinned begin/poll/cancel continuation host.");
+	Niagara.State = TEXT("source_candidate_external_edit_ops");
+	Niagara.Remediation = TEXT("Inspect with bIncludeTopology, dry-run apply_plan, resubmit with operation_id and plan_hash, poll hyper_operation_status, then run hyper_niagara_validate once compiling finishes. Close the System's Niagara editor tab first. Planning may load referenced module scripts or emitter templates; it never loads the edited System. Removals stay on Epic's NiagaraToolsets.");
 	return {Niagara};
 }
 
@@ -1015,14 +928,14 @@ const FHyperAIStudioDomainAdapterDescriptor& FHyperAIStudioNiagaraContracts::Get
 	{
 		FHyperAIStudioDomainAdapterDescriptor Value;
 		Value.PackId = PackId;
-		Value.AdapterId = TEXT("adapter.niagara.loaded_native.ue58");
-		Value.SemanticVersion = TEXT("1.0.0");
-		Value.AdapterVersion = 1;
+		Value.AdapterId = TEXT("adapter.niagara.external_edit.ue58");
+		Value.SemanticVersion = TEXT("2.0.0");
+		Value.AdapterVersion = 2;
 		Value.Variants.Add({TEXT("hyper_niagara_inspect"), InspectVariantId,
 			InspectPayloadTypeId, InspectPayloadSchemaFingerprint(), InspectResultTypeId,
 			InspectResultSchemaFingerprint(), EHyperAIStudioDomainSafety::Read});
 		Value.Variants.Add({TEXT("hyper_niagara_apply_plan"), MutationVariantId,
-			RenamePayloadTypeId, RenamePayloadSchemaFingerprint(), MutationResultTypeId,
+			EditOpsPayloadTypeId, EditOpsPayloadSchemaFingerprint(), MutationResultTypeId,
 			MutationResultSchemaFingerprint(), EHyperAIStudioDomainSafety::Edit});
 		Value.Variants.Add({TEXT("hyper_niagara_validate"), ValidateVariantId,
 			ValidatePayloadTypeId, ValidatePayloadSchemaFingerprint(), ValidateResultTypeId,
@@ -1286,8 +1199,16 @@ bool FHyperAIStudioNiagaraContracts::CaptureExact(
 		{
 			continue;
 		}
+		const ENiagaraScriptCompileStatus CompileStatus = Script->GetVMExecutableData().LastCompileStatus;
+		// A script not compiled for its emitter's sim target (a CPU emitter's GPU compute script, a GPU emitter's
+		// particle VM scripts) never carries a status. Epic's GetSystemCompileState ranks Unknown lowest for the
+		// same reason; treating it as "state unknown" rejected almost every real System.
+		if (CompileStatus == ENiagaraScriptCompileStatus::NCS_Unknown)
+		{
+			continue;
+		}
 		++AuthoritativeCompileScriptCount;
-		switch (Script->GetVMExecutableData().LastCompileStatus)
+		switch (CompileStatus)
 		{
 		case ENiagaraScriptCompileStatus::NCS_Dirty:
 			Health.bCompileStale = true;
@@ -1508,6 +1429,32 @@ FHyperAINiagaraInspectReport FHyperAIStudioNiagaraContracts::Inspect(
 			Report.NextCursor = Seal + TEXT(".") + FString::FromInt(NextOffset);
 		}
 	}
+
+	if (Request.bIncludeTopology)
+	{
+		UNiagaraSystem* System = Cast<UNiagaraSystem>(FSoftObjectPath(Request.TargetPath).ResolveObject());
+		TArray<FHyperAINiagaraEmitterTopology> Emitters;
+		bool bTopologyTruncated = false;
+		FString TopologyError;
+		if (!IsInGameThread() || !System
+			|| !HyperAIStudio::Niagara::ExternalEditGate::ReadTopology(*System, Emitters, bTopologyTruncated, TopologyError))
+		{
+			AddIssue(Report.Issues, TEXT("topology_unavailable"), TEXT("warning"),
+				TEXT("Emitter topology could not be read."), TopologyError);
+		}
+		for (FHyperAINiagaraEmitterTopology& Emitter : Emitters)
+		{
+			const int32 EmitterBytes = EstimateTopologyBytes(Emitter);
+			if (EstimatedBytes + EmitterBytes > Request.MaxOutputBytes)
+			{
+				bTopologyTruncated = true;
+				break;
+			}
+			EstimatedBytes += EmitterBytes;
+			Report.Emitters.Add(MoveTemp(Emitter));
+		}
+		Report.bTruncated |= bTopologyTruncated;
+	}
 	return Report;
 }
 
@@ -1518,12 +1465,16 @@ FHyperAINiagaraValidateReport FHyperAIStudioNiagaraContracts::Validate(
 	FHyperAINiagaraValidateReport Report;
 	Report.Policy = Request.Policy;
 	Report.Capabilities = GetCapabilityMatrix();
-	auto Reject = [&](const TCHAR* Status, const TCHAR* Diagnostic)
+	auto Reject = [&](const FString& Status, const FString& Diagnostic)
 	{
 		Report.Status = Status;
 		Report.Diagnostic = Diagnostic;
 		return Report;
 	};
+	if (!IsInGameThread())
+	{
+		return Reject(TEXT("game_thread_required"), TEXT("Niagara validation reads editor state on the game thread."));
+	}
 	if (!IsCanonicalProjectObjectPath(Request.TargetPath))
 	{
 		return Reject(TEXT("invalid_target_path"),
@@ -1542,350 +1493,102 @@ FHyperAINiagaraValidateReport FHyperAIStudioNiagaraContracts::Validate(
 		return Reject(TEXT("invalid_bounds_or_revision"),
 			TEXT("revision, issue, game-thread, or output bounds are outside the closed contract."));
 	}
-	if (!FHyperAIStudioExtensionRuntime::IsPendingNativeToolsDevModeEnabled())
-	{
-		return Reject(TEXT("source_candidate_dev_mode_required"),
-			TEXT("Native Niagara validation is source-candidate evidence only; virtual rule execution is not hard latency/memory bounded."));
-	}
 
-	const double Started = FPlatformTime::Seconds();
-	auto DeadlineExceeded = [&]()
-	{
-		return (FPlatformTime::Seconds() - Started) * 1000.0 > Request.MaxGameThreadMs;
-	};
 	FHyperAIStudioNiagaraValueSnapshot Snapshot;
 	FString CaptureStatus;
 	FString CaptureDiagnostic;
 	if (!CaptureExact(Request.TargetPath, Request.MaxGameThreadMs, Snapshot,
 		CaptureStatus, CaptureDiagnostic))
 	{
-		return Reject(*CaptureStatus, *CaptureDiagnostic);
+		return Reject(CaptureStatus, CaptureDiagnostic);
 	}
 	Report.Revision = Snapshot.Health.Revision;
 	Report.bRevisionComplete = Snapshot.Health.bRevisionComplete;
 	Report.bFreshCapture = true;
-	bool bComplete = Snapshot.bComplete;
-	int64 EstimatedBytes = 1024ll + EstimateCapabilitiesBytes(Report.Capabilities);
-	auto AddBoundedReportIssue = [&](const FHyperAINiagaraIssue& Issue)
-	{
-		if (Issue.Severity == TEXT("error")) ++Report.ErrorCount;
-		else if (Issue.Severity == TEXT("warning")) ++Report.WarningCount;
-		else ++Report.InfoCount;
-		const int32 ItemBytes = EstimateIssueBytes(Issue);
-		if (Report.Issues.Num() >= Request.MaxIssues
-			|| EstimatedBytes + ItemBytes > Request.MaxOutputBytes)
-		{
-			Report.bTruncated = true;
-			bComplete = false;
-			return;
-		}
-		Report.Issues.Add(Issue);
-		EstimatedBytes += ItemBytes;
-	};
-	for (const FHyperAINiagaraIssue& Issue : Snapshot.CaptureIssues)
-	{
-		AddBoundedReportIssue(Issue);
-	}
 	if (!Request.ExpectedRevision.IsEmpty() && Request.ExpectedRevision != Report.Revision)
 	{
-		TArray<FHyperAINiagaraIssue> Temp;
-		AddIssue(Temp, TEXT("stale_revision"), TEXT("error"),
-			TEXT("The exact loaded Niagara System no longer matches expected_revision."));
-		AddBoundedReportIssue(Temp[0]);
-		bComplete = false;
-	}
-	if (Snapshot.Health.bCompileActive || Snapshot.Health.bCompileStale)
-	{
-		TArray<FHyperAINiagaraIssue> Temp;
-		AddIssue(Temp, TEXT("compile_not_terminal_or_stale"), TEXT("error"),
-			TEXT("Independent validation never waits for or flushes a Niagara compile."));
-		AddBoundedReportIssue(Temp[0]);
-		bComplete = false;
-	}
-	if (!bComplete || Report.bTruncated || DeadlineExceeded())
-	{
-		Report.Status = TEXT("validation_incomplete");
-		Report.Diagnostic = TEXT("Exact revision, terminal compile, issue/output bounds, or the game-thread deadline were not proven; no native rule was inspected or executed.");
-		Report.bComplete = false;
-		Report.bValid = false;
-		return Report;
+		return Reject(TEXT("stale_revision"),
+			TEXT("The loaded Niagara System no longer matches expected_revision; inspect it again."));
 	}
 
 	UNiagaraSystem* System = Cast<UNiagaraSystem>(FSoftObjectPath(Request.TargetPath).ResolveObject());
-	TSharedPtr<FNiagaraSystemViewModel> ViewModel = GetExistingSystemViewModel(System);
-	if (!System || !ViewModel.IsValid())
+	HyperAIStudio::Niagara::ExternalEditGate::FDiagnostics Diagnostics;
+	FString DiagnosticsError;
+	if (!System || !HyperAIStudio::Niagara::ExternalEditGate::ReadDiagnostics(
+		*System, Request.MaxIssues, Diagnostics, DiagnosticsError))
 	{
-		TArray<FHyperAINiagaraIssue> Temp;
-		AddIssue(Temp, TEXT("existing_system_view_model_required"), TEXT("error"),
-			TEXT("Loaded-native Niagara validation requires the system to already be open in Niagara Editor."),
-			TEXT("HyperAI does not construct a data-processing view model because UE 5.8 initialization can compile and synchronously load default validation rule sets."));
-		AddBoundedReportIssue(Temp[0]);
-		Report.Status = TEXT("validation_incomplete");
-		Report.Diagnostic = TEXT("No existing Niagara System ViewModel was available; nothing was loaded or created.");
-		Report.bComplete = false;
-		Report.bValid = false;
-		return Report;
-	}
-	if (!NativeValidationTraversalWithinBounds(*System))
-	{
-		TArray<FHyperAINiagaraIssue> Temp;
-		AddIssue(Temp, TEXT("native_validation_structure_bound_exceeded"), TEXT("error"),
-			TEXT("Emitter versions, renderers, simulation stages, or event handlers exceed the sealed native-validation bounds."));
-		AddBoundedReportIssue(Temp[0]);
-		Report.Status = TEXT("validation_incomplete");
-		Report.Diagnostic = TEXT("Native rule traversal bounds were not proven; no validation rule executed.");
-		Report.bComplete = false;
-		Report.bValid = false;
-		return Report;
+		return Reject(TEXT("diagnostics_unavailable"),
+			System ? DiagnosticsError : FString(TEXT("The target System is not loaded.")));
 	}
 
-	struct FRuleInvocation
+	int64 EstimatedBytes = 1024ll + EstimateCapabilitiesBytes(Report.Capabilities);
+	Report.bTruncated = Diagnostics.bTruncated;
+	for (FHyperAINiagaraIssue& Issue : Diagnostics.Issues)
 	{
-		const UNiagaraValidationRule* Rule = nullptr;
-		UNiagaraStackEntry* Source = nullptr;
-	};
-	TArray<FRuleInvocation> Invocations;
-	auto AddRules = [&](TConstArrayView<TObjectPtr<UNiagaraValidationRule>> Rules,
-		UNiagaraStackEntry* Source)
-	{
-		for (const UNiagaraValidationRule* Rule : Rules)
+		const int32 IssueBytes = EstimateIssueBytes(Issue);
+		if (EstimatedBytes + IssueBytes > Request.MaxOutputBytes)
 		{
-			if (Rule && Rule->IsEnabled())
-			{
-				if (Invocations.Num() >= MaxValidationRules)
-				{
-					bComplete = false;
-					return false;
-				}
-				Invocations.Add({Rule, Source});
-			}
-		}
-		return true;
-	};
-
-	const UNiagaraEditorSettings* Settings = GetDefault<UNiagaraEditorSettings>();
-	if (!Settings)
-	{
-		bComplete = false;
-	}
-	else if (Settings->DefaultValidationRuleSets.Num() > MaxValidationRules)
-	{
-		bComplete = false;
-		TArray<FHyperAINiagaraIssue> Temp;
-		AddIssue(Temp, TEXT("default_rule_set_bound_exceeded"), TEXT("error"),
-			TEXT("Configured default Niagara validation rule sets exceed the closed bound."));
-		AddBoundedReportIssue(Temp[0]);
-	}
-	else
-	{
-		for (const TSoftObjectPtr<UNiagaraValidationRuleSet>& SoftRuleSet
-			: Settings->DefaultValidationRuleSets)
-		{
-			if (SoftRuleSet.IsNull())
-			{
-				continue;
-			}
-			const UNiagaraValidationRuleSet* RuleSet = ResolveAlreadyLoadedRuleSet(SoftRuleSet);
-			if (!RuleSet)
-			{
-				bComplete = false;
-				TArray<FHyperAINiagaraIssue> Temp;
-				AddIssue(Temp, TEXT("default_rule_set_unloaded"), TEXT("error"),
-					TEXT("A configured default Niagara validation rule set is not already loaded."),
-					TEXT("Validation fails closed instead of resolving an unloaded soft reference."), FString(), SoftRuleSet.ToString());
-				AddBoundedReportIssue(Temp[0]);
-				continue;
-			}
-			if (!AddRules(RuleSet->ValidationRules, nullptr)) break;
-		}
-	}
-	if (UNiagaraEffectType* EffectType = System->GetEffectType())
-	{
-		if (EffectType->ValidationRules.Num() > MaxValidationRules
-			|| EffectType->ValidationRuleSets.Num() > MaxValidationRules)
-		{
-			bComplete = false;
-		}
-		else if (AddRules(EffectType->ValidationRules, nullptr))
-		{
-			for (const UNiagaraValidationRuleSet* RuleSet : EffectType->ValidationRuleSets)
-			{
-				if (RuleSet && !AddRules(RuleSet->ValidationRules, nullptr)) break;
-			}
-		}
-	}
-
-	TSet<UNiagaraStackEntry*> SeenStackEntries;
-	TArray<UNiagaraStackModuleItem*> Modules;
-	bool bStacksWithinBounds = AddStackEntriesBounded(
-		ViewModel->GetSystemStackViewModel(), SeenStackEntries, Modules);
-	const TArray<TSharedRef<FNiagaraEmitterHandleViewModel>>& EmitterViewModels =
-		ViewModel->GetEmitterHandleViewModels();
-	if (EmitterViewModels.Num() > MaxEmitters)
-	{
-		bStacksWithinBounds = false;
-	}
-	else
-	{
-		for (const TSharedRef<FNiagaraEmitterHandleViewModel>& EmitterViewModel
-			: EmitterViewModels)
-		{
-			if (EmitterViewModel->GetIsEnabled())
-			{
-				bStacksWithinBounds &= AddStackEntriesBounded(
-					EmitterViewModel->GetEmitterStackViewModel(), SeenStackEntries, Modules);
-			}
-		}
-	}
-	if (!bStacksWithinBounds)
-	{
-		bComplete = false;
-		TArray<FHyperAINiagaraIssue> Temp;
-		AddIssue(Temp, TEXT("stack_entry_bound_exceeded"), TEXT("error"),
-			TEXT("Existing Niagara stack entries exceed the closed validation bound."));
-		AddBoundedReportIssue(Temp[0]);
-	}
-	else
-	{
-		for (UNiagaraStackModuleItem* Module : Modules)
-		{
-			if (!Module || !Module->GetIsEnabled())
-			{
-				continue;
-			}
-			if (UNiagaraScript* Script = Module->GetModuleNode().FunctionScript)
-			{
-				if (!AddRules(Script->ValidationRules, Module)) break;
-			}
-		}
-	}
-
-	for (const FRuleInvocation& Invocation : Invocations)
-	{
-		if (!IsNativeValidationRuleClass(Invocation.Rule->GetClass()))
-		{
-			bComplete = false;
-			TArray<FHyperAINiagaraIssue> Temp;
-			AddIssue(Temp, TEXT("custom_validation_rule_unsupported"), TEXT("error"),
-				TEXT("An enabled validation rule is outside the sealed UE 5.8 native class allowlist."),
-				TEXT("Arbitrary validation UObject code is never executed."),
-				Invocation.Rule->GetClass()->GetPathName(), Invocation.Rule->GetPathName());
-			AddBoundedReportIssue(Temp[0]);
-		}
-	}
-	if (!bComplete || DeadlineExceeded())
-	{
-		Report.Status = TEXT("validation_incomplete");
-		Report.Diagnostic = TEXT("Validation prerequisites, bounds, or loaded native rule authority are incomplete; no rule fixes ran.");
-		Report.bComplete = false;
-		Report.bValid = false;
-		return Report;
-	}
-	// UE 5.8 exposes each rule as injected virtual UObject code. The closed class
-	// allowlist prevents arbitrary custom code, but CheckValidity has no cancellable
-	// per-call work/result sink. This is a permanent v1 admission blocker even in dev mode.
-	TArray<FHyperAINiagaraIssue> NativeBoundIssue;
-	AddIssue(NativeBoundIssue, TEXT("native_rule_execution_not_hard_bounded"), TEXT("error"),
-		TEXT("UE native validation-rule execution has no hard per-call latency or allocation bound."),
-		TEXT("Results are capped after each virtual call and deadlines are checked between rules; admission requires replacement with closed value-snapshot analyzers."));
-	AddBoundedReportIssue(NativeBoundIssue[0]);
-	if (!bComplete)
-	{
-		Report.Status = TEXT("validation_incomplete");
-		Report.Diagnostic = TEXT("The native-rule admission blocker did not fit the closed report bounds; no rule executed.");
-		Report.bComplete = false;
-		Report.bValid = false;
-		return Report;
-	}
-
-	FNiagaraValidationContext Context;
-	Context.ViewModel = ViewModel;
-	for (const FRuleInvocation& Invocation : Invocations)
-	{
-		if (DeadlineExceeded())
-		{
-			bComplete = false;
+			Report.bTruncated = true;
 			break;
 		}
-		Context.Source = Invocation.Source;
-		TArray<FNiagaraValidationResult> NativeResults;
-		Invocation.Rule->CheckValidity(Context, NativeResults);
-		++Report.ExecutedRuleCount;
-		if (DeadlineExceeded())
-		{
-			bComplete = false;
-			break;
-		}
-		if (NativeResults.Num() > MaxInternalValidationResults)
-		{
-			bComplete = false;
-			break;
-		}
-		for (const FNiagaraValidationResult& Native : NativeResults)
-		{
-			const FString Summary = Native.SummaryText.ToString();
-			const FString Description = Native.Description.ToString();
-			if (Summary.Len() > MaxIssueSummaryChars
-				|| Description.Len() > MaxIssueDescriptionChars)
-			{
-				bComplete = false;
-				continue;
-			}
-			const TCHAR* Severity = Native.Severity == ENiagaraValidationSeverity::Error
-				? TEXT("error") : Native.Severity == ENiagaraValidationSeverity::Warning
-					? TEXT("warning") : TEXT("info");
-			const UObject* SourceObject = Native.SourceObject.IsValid()
-				? Native.SourceObject.Get() : static_cast<UObject*>(Invocation.Source);
-			TArray<FHyperAINiagaraIssue> Temp;
-			AddIssue(Temp, TEXT("native_validation_result"), Severity, Summary, Description,
-				Invocation.Rule->GetClass()->GetPathName(),
-				SourceObject ? SourceObject->GetPathName() : Request.TargetPath);
-			AddBoundedReportIssue(Temp[0]);
-			// Native.Fixes and Native.Links remain call-local, never execute, and never escape.
-		}
-		if (!bComplete)
-		{
-			break;
-		}
+		EstimatedBytes += IssueBytes;
+		Report.Issues.Add(MoveTemp(Issue));
 	}
-	if (DeadlineExceeded())
-	{
-		bComplete = false;
-	}
-	if (!bComplete || Report.bTruncated)
-	{
-		Report.Status = TEXT("validation_incomplete");
-		Report.Diagnostic = TEXT("Native validation exceeded a hard rule, result, text, time, issue, or output bound; PASS is impossible.");
-		Report.bComplete = false;
-		Report.bValid = false;
-		return Report;
-	}
-	Report.bOk = false;
-	Report.bComplete = false;
-	Report.bValid = false;
-	Report.Status = TEXT("validation_incomplete_native_rule_execution_not_hard_bounded");
-	Report.Diagnostic = TEXT("Loaded UE-native rules ran in explicit dev evidence mode without soft loads or fix execution, but their virtual calls are not hard latency/memory bounded. This result is never admission PASS.");
+
+	Report.ErrorCount = Diagnostics.ErrorCount;
+	Report.WarningCount = Diagnostics.WarningCount;
+	Report.InfoCount = Diagnostics.InfoCount;
+	Report.bCompileStateKnown = Diagnostics.bCompileStateKnown;
+	Report.bCompiling = Diagnostics.bCompiling;
+	// Counts are taken before truncation, so a truncated list still yields a trustworthy verdict.
+	Report.bComplete = Diagnostics.bCompileStateKnown && !Diagnostics.bCompiling;
+	const bool bRuntimeReady = Request.Policy == TEXT("runtime_ready");
+	Report.bValid = Report.bComplete && Report.ErrorCount == 0 && (!bRuntimeReady || Report.WarningCount == 0);
+	Report.bOk = true;
+	Report.Status = !Report.bComplete ? TEXT("compile_in_progress") : Report.bValid ? TEXT("valid") : TEXT("invalid");
+	Report.Diagnostic = !Report.bComplete
+		? TEXT("The System is still compiling or its compile state is unknown; validate again once it finishes.")
+		: Report.bValid
+			? TEXT("No errors under this policy.")
+			: TEXT("Issues listed below. Fixable stack issues carry fix_ids for an apply_stack_issue_fix op.");
 	return Report;
 }
 
-FString FHyperAIStudioNiagaraContracts::ComputeRenameSemanticFingerprint(
-	const FHyperAIStudioNiagaraRenamePayload& Payload)
+FString FHyperAIStudioNiagaraContracts::ComputeEditOpsSemanticFingerprint(
+	const FHyperAIStudioNiagaraEditOpsPayload& Payload)
 {
 	using namespace HyperAIStudio::Niagara::Private;
 	FString Canonical;
-	AppendToken(Canonical, TEXT("hyperai.niagara.user-parameter-rename-intent.v1"));
+	AppendToken(Canonical, TEXT("hyperai.niagara.edit-ops-intent.v1"));
 	AppendToken(Canonical, PackId);
 	AppendToken(Canonical, TEXT("hyper_niagara_apply_plan"));
 	AppendToken(Canonical, MutationVariantId);
-	AppendToken(Canonical, RenamePayloadSchemaFingerprint());
+	AppendToken(Canonical, EditOpsPayloadSchemaFingerprint());
 	AppendToken(Canonical, GetAdapterDescriptor().AdapterFingerprint);
 	AppendToken(Canonical, Payload.TargetPath);
 	AppendToken(Canonical, Payload.BaseRevision);
-	AppendToken(Canonical, Payload.ExpectedVariableGuid);
-	AppendToken(Canonical, Payload.OldName);
-	AppendToken(Canonical, Payload.NewName);
-	AppendToken(Canonical, Payload.TypeFingerprint);
-	AppendToken(Canonical, Payload.DefaultFingerprint);
+	AppendToken(Canonical, Payload.bCompile ? TEXT("compile") : TEXT("no_compile"));
+	AppendToken(Canonical, Payload.bSave ? TEXT("save") : TEXT("no_save"));
+	AppendToken(Canonical, FString::FromInt(Payload.Ops.Num()));
+	for (const FHyperAINiagaraEditOp& Op : Payload.Ops)
+	{
+		AppendToken(Canonical, Op.Kind);
+		AppendToken(Canonical, Op.EmitterName);
+		AppendToken(Canonical, Op.ScriptName);
+		AppendToken(Canonical, Op.ModuleName);
+		AppendToken(Canonical, FString::FromInt(Op.InputNameStack.Num()));
+		for (const FString& InputName : Op.InputNameStack)
+		{
+			AppendToken(Canonical, InputName);
+		}
+		AppendToken(Canonical, Op.AssetPath);
+		AppendToken(Canonical, Op.Name);
+		AppendToken(Canonical, Op.ValueType);
+		AppendToken(Canonical, Op.Value);
+		AppendToken(Canonical, Op.bEnabled ? TEXT("enabled") : TEXT("disabled"));
+		AppendToken(Canonical, Op.IssueId);
+		AppendToken(Canonical, Op.FixId);
+	}
 	return FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(Canonical);
 }
 
@@ -1893,16 +1596,16 @@ FHyperAINiagaraApplyPlanReport FHyperAIStudioNiagaraContracts::BuildPlan(
 	const FHyperAINiagaraApplyPlanRequest& Request)
 {
 	using namespace HyperAIStudio::Niagara::Private;
+	namespace Gate = HyperAIStudio::Niagara::ExternalEditGate;
 	FHyperAINiagaraApplyPlanReport Report;
 	Report.bDryRun = Request.bDryRun;
 	Report.OperationId = Request.OperationId.Left(FHyperAIStudioDomainLimits::MaxOperationIdChars);
 	Report.Capabilities = GetCapabilityMatrix();
-	auto Reject = [&](const TCHAR* Status, const TCHAR* Diagnostic)
+	auto Reject = [&](const FString& Status, const FString& Diagnostic)
 	{
 		Report.Status = Status;
 		Report.Diagnostic = Diagnostic;
 		Report.bOk = false;
-		Report.bTrustedPrepared = false;
 		Report.bStaged = false;
 		Report.bExecutionSubmitted = false;
 		Report.bFallbackPermitted = false;
@@ -1911,70 +1614,69 @@ FHyperAINiagaraApplyPlanReport FHyperAIStudioNiagaraContracts::BuildPlan(
 	if (!IsInGameThread())
 	{
 		return Reject(TEXT("game_thread_required"),
-			TEXT("Niagara rename planning requires one bounded Unreal game-thread capture."));
+			TEXT("Niagara edit planning reads editor state on the game thread."));
 	}
 	if (Request.bDryRun
 		&& (!Request.OperationId.IsEmpty() || !Request.ExpectedPlanHash.IsEmpty()))
 	{
 		return Reject(TEXT("unexpected_submission_fields"),
-			TEXT("Dry-run planning prohibits operation_id and expected_plan_hash."));
+			TEXT("A dry run takes no operation_id or expected_plan_hash."));
+	}
+	if (!Request.bDryRun
+		&& (!FHyperAIStudioExtensionRuntime::IsValidOperationId(Request.OperationId)
+			|| !IsCanonicalSha256(Request.ExpectedPlanHash)))
+	{
+		return Reject(TEXT("invalid_submission_fields"),
+			TEXT("A non-dry submission needs a valid operation_id and the plan_hash its dry run returned."));
 	}
 	if (!IsCanonicalProjectObjectPath(Request.TargetPath)
 		|| !IsCanonicalSha256(Request.ExpectedRevision))
 	{
 		return Reject(TEXT("invalid_target_or_revision"),
-			TEXT("A canonical loaded target and complete exact expected_revision are required."));
+			TEXT("A canonical loaded target and the exact revision from hyper_niagara_inspect are required."));
 	}
-	if (!IsUserParameterName(Request.Rename.OldName)
-		|| !IsUserParameterName(Request.Rename.NewName)
-		|| Request.Rename.OldName == Request.Rename.NewName
-		|| !IsCanonicalSha256(Request.Rename.ExpectedTypeFingerprint))
+	if (Request.Ops.IsEmpty() || Request.Ops.Num() > MaxOpsPerPlan)
 	{
-		return Reject(TEXT("invalid_rename_identity"),
-			TEXT("Rename requires distinct canonical User.* names and an exact type fingerprint."));
+		return Reject(TEXT("invalid_op_count"),
+			FString::Printf(TEXT("A plan needs between 1 and %d ops."), MaxOpsPerPlan));
 	}
-	FGuid ExpectedGuid;
-	if (!FGuid::ParseExact(Request.Rename.ExpectedVariableGuid,
-		EGuidFormats::DigitsWithHyphensLower, ExpectedGuid) || !ExpectedGuid.IsValid()
-		|| CanonicalGuid(ExpectedGuid) != Request.Rename.ExpectedVariableGuid)
-	{
-		return Reject(TEXT("invalid_variable_guid"),
-			TEXT("expected_variable_guid must be one nonzero lowercase hyphenated GUID."));
-	}
-	if (Request.DeadlineMs < MinAsyncDeadlineMs || Request.DeadlineMs > MaxAsyncDeadlineMs
-		|| Request.MaxGameThreadMs < 1
+	// These mirror the shared typed-artifact contract bounds, which otherwise reject the plan with a generic error.
+	if (Request.MaxGameThreadMs < 50
 		|| Request.MaxGameThreadMs > MaxMutationGameThreadMs
 		|| Request.MaxOutputBytes < MinOutputBytes
 		|| Request.MaxOutputBytes > MaxOutputBytes)
 	{
 		return Reject(TEXT("invalid_bounds"),
-			TEXT("Async deadline, game-thread work, or output bounds are outside the closed contract."));
+			TEXT("max_game_thread_ms must be 50-250 and max_output_bytes within the closed output bounds."));
 	}
-	if (!Request.ExpectedPlanHash.IsEmpty() && !IsCanonicalSha256(Request.ExpectedPlanHash))
+	if (Request.bCompile && !Request.bSave)
 	{
-		return Reject(TEXT("invalid_expected_plan_hash"),
-			TEXT("A supplied expected_plan_hash must be canonical even though v1 cannot stage it."));
+		return Reject(TEXT("compile_requires_save"),
+			TEXT("Compiling requires saving; set bSave true, or bCompile false to leave the edit unsaved."));
 	}
-	if (!Request.bDryRun
-		&& !FHyperAIStudioExtensionRuntime::IsValidOperationId(Request.OperationId))
+	if (!Gate::IsApiAvailable())
 	{
-		return Reject(TEXT("invalid_operation_id"),
-			TEXT("Non-dry intent requires a valid durable-journal operation_id."));
+		return Reject(TEXT("external_edit_api_unavailable"),
+			TEXT("This engine build does not provide UNiagaraExternalEditUtilities."));
+	}
+	for (int32 Index = 0; Index < Request.Ops.Num(); ++Index)
+	{
+		FString OpStatus;
+		FString OpDiagnostic;
+		// Resolving here loads referenced module scripts or emitter templates, never the System being edited.
+		if (!Gate::ValidateOp(Request.Ops[Index], /*bResolveAssets=*/true, OpStatus, OpDiagnostic))
+		{
+			return Reject(OpStatus, FString::Printf(TEXT("Op %d: %s"), Index, *OpDiagnostic));
+		}
 	}
 
-	const double Started = FPlatformTime::Seconds();
-	auto DeadlineExceeded = [&]()
-	{
-		return (FPlatformTime::Seconds() - Started) * 1000.0
-			> Request.MaxGameThreadMs;
-	};
 	FHyperAIStudioNiagaraValueSnapshot Snapshot;
 	FString CaptureStatus;
 	FString CaptureDiagnostic;
 	if (!CaptureExact(Request.TargetPath, Request.MaxGameThreadMs, Snapshot,
 		CaptureStatus, CaptureDiagnostic))
 	{
-		return Reject(*CaptureStatus, *CaptureDiagnostic);
+		return Reject(CaptureStatus, CaptureDiagnostic);
 	}
 	Report.BaseRevision = Snapshot.Health.Revision;
 	int64 EstimatedOutputBytes = 1024ll + EstimateCapabilitiesBytes(Report.Capabilities);
@@ -1985,7 +1687,7 @@ FHyperAINiagaraApplyPlanReport FHyperAIStudioNiagaraContracts::BuildPlan(
 			|| EstimatedOutputBytes + IssueBytes > Request.MaxOutputBytes)
 		{
 			return Reject(TEXT("issue_or_output_bound_exceeded"),
-				TEXT("Exact rename planning exceeded the closed issue or output bound."));
+				TEXT("Planning diagnostics exceeded the closed issue or output bound."));
 		}
 		EstimatedOutputBytes += IssueBytes;
 		Report.Issues.Add(Issue);
@@ -1993,89 +1695,138 @@ FHyperAINiagaraApplyPlanReport FHyperAIStudioNiagaraContracts::BuildPlan(
 	if (!Snapshot.bComplete || !Snapshot.Health.bRevisionComplete)
 	{
 		return Reject(TEXT("revision_incomplete"),
-			TEXT("Rename dry-run requires complete loaded and on-disk CAS evidence."));
+			TEXT("Planning requires complete loaded and on-disk revision evidence."));
 	}
 	if (Snapshot.Health.Revision != Request.ExpectedRevision)
 	{
 		return Reject(TEXT("stale_revision"),
-			TEXT("The exact loaded Niagara System changed after inspection."));
+			TEXT("The loaded Niagara System changed after inspection; inspect it again."));
 	}
 	if (Snapshot.Health.bPackageDirty || !Snapshot.Health.bExistsOnDisk
 		|| Snapshot.Health.DiskExistence != TEXT("exists"))
 	{
 		return Reject(TEXT("persisted_clean_base_required"),
-			TEXT("Rename preparation requires one clean saved base with proven Asset Registry presence."));
+			TEXT("Save or revert pending changes first: edits start from one clean saved System."));
 	}
 	if (!Snapshot.Health.bCompileStateKnown || Snapshot.Health.bCompileActive
 		|| Snapshot.Health.bCompileStale || Snapshot.Health.bCompileHasErrors)
 	{
 		return Reject(TEXT("compile_not_clean_terminal"),
-			TEXT("Rename preparation never waits for compilation and requires a clean terminal compile."));
+			TEXT("Planning never waits for compilation and needs a finished, error-free compile."));
 	}
-	UNiagaraSystem* System = Cast<UNiagaraSystem>(
-		FSoftObjectPath(Request.TargetPath).ResolveObject());
-	TSharedPtr<FNiagaraSystemViewModel> ViewModel = GetExistingSystemViewModel(System);
-	if (!System || !ViewModel.IsValid() || !Snapshot.Health.bExistingSystemViewModel)
+	UNiagaraSystem* System = Cast<UNiagaraSystem>(FSoftObjectPath(Request.TargetPath).ResolveObject());
+	if (!System)
 	{
-		return Reject(TEXT("existing_system_view_model_required"),
-			TEXT("The exact System must already be open; HyperAI never creates or opens a Niagara ViewModel."));
+		return Reject(TEXT("target_not_loaded"), TEXT("The target System is not loaded."));
+	}
+	if (GetExistingSystemViewModel(System).IsValid())
+	{
+		return Reject(TEXT("target_open_in_editor"),
+			TEXT("Close the System's Niagara editor tab first. Edits run through a separate headless view model, and two view models over one System can overwrite each other."));
+	}
+	const TSharedRef<FHyperAIStudioNiagaraEditOpsPayload, ESPMode::ThreadSafe> Payload =
+		MakeShared<FHyperAIStudioNiagaraEditOpsPayload, ESPMode::ThreadSafe>();
+	Payload->TargetPath = Request.TargetPath;
+	Payload->BaseRevision = Snapshot.Health.Revision;
+	Payload->Ops = Request.Ops;
+	Payload->bCompile = Request.bCompile;
+	Payload->bSave = Request.bSave;
+	Payload->SemanticFingerprint = ComputeEditOpsSemanticFingerprint(*Payload);
+	if (Payload->GetBoundedByteSize() > FHyperAIStudioDomainLimits::MaxRequestBytes)
+	{
+		return Reject(TEXT("payload_bound_exceeded"), TEXT("The ops exceed the bounded request size; split them into smaller plans."));
+	}
+	Report.SemanticFingerprint = Payload->SemanticFingerprint;
+
+	FHyperAIStudioTrustedArtifactRequest Trusted;
+	Trusted.PackId = PackId;
+	Trusted.ToolName = TEXT("hyper_niagara_apply_plan");
+	Trusted.VariantId = MutationVariantId;
+	Trusted.Safety = EHyperAIStudioDomainSafety::Edit;
+	Trusted.ArtifactSemanticFingerprint = Payload->SemanticFingerprint;
+	Trusted.EffectTarget = Request.TargetPath;
+	// Phases run one per tick; apply, compile, validate, save and verify share these operation-wide budgets.
+	Trusted.DeadlineMs = FHyperAIStudioTypedArtifactLimits::MaxArtifactDeadlineMs;
+	Trusted.MaxNativeOperations = MaxOpsPerPlan;
+	Trusted.MaxGameThreadMs = FHyperAIStudioTypedArtifactLimits::MaxArtifactGameThreadMs;
+	Trusted.MaxOutputBytes = Request.MaxOutputBytes;
+	// The host caps results at 256 bytes; the largest phase result ("completed" plus a hash) estimates at exactly 256.
+	Trusted.MaxResultBytes = 256;
+	Trusted.StageLifetimeMs = StageLifetimeMs;
+	Trusted.bCompileOnce = Request.bCompile;
+	Trusted.bSaveOnce = Request.bSave;
+	Trusted.bValidateOnce = true;
+	Trusted.bVerifyFreshOnce = true;
+
+	FHyperAIStudioTrustedPreparedArtifact Prepared;
+	FHyperAIStudioTrustedPrepareReport Prepare;
+	FString PrepareError;
+	const TSharedRef<FHyperAIStudioNiagaraFreshVerifier, ESPMode::ThreadSafe> Verifier =
+		MakeShared<FHyperAIStudioNiagaraFreshVerifier, ESPMode::ThreadSafe>(GetAdapterDescriptor().AdapterFingerprint);
+	if (!FHyperAIStudioTrustedExecutionFacade::PrepareDryRun(Trusted, Payload, Verifier, Prepared, Prepare, PrepareError)
+		|| !Prepare.bPrepared)
+	{
+		FString Diagnostic = PrepareError.IsEmpty() ? Prepare.Status.Diagnostic : PrepareError;
+		if (!Prepare.Status.BlockingPrerequisiteIds.IsEmpty())
+		{
+			Diagnostic += TEXT(" Blocking: ") + FString::Join(Prepare.Status.BlockingPrerequisiteIds, TEXT(", "));
+		}
+		return Reject(Prepare.Status.StatusCode.IsEmpty() ? FString(TEXT("prepare_failed")) : Prepare.Status.StatusCode,
+			Diagnostic);
 	}
 
-	const FHyperAINiagaraUserParameterIdentity* Parameter = nullptr;
-	FString RenameIdentityError;
-	if (!ValidateRenameIdentityAgainstSnapshot(
-		Snapshot.Parameters, Request.Rename, Parameter, RenameIdentityError))
-	{
-		return Reject(*RenameIdentityError,
-			TEXT("The asserted GUID/name/type identity or unique destination no longer matches the exact snapshot."));
-	}
+	Report.bTrustedPrepared = true;
+	// The host's plan hash differs between preparations of identical intent, so review binds to the sealed semantic
+	// fingerprint instead: target, base revision, ordered ops and flags. The host still seals its own staging.
+	Report.PlanHash = Payload->SemanticFingerprint;
+	Report.AuthorizationPlanHash = Prepare.PlanHash;
+	Report.Effects.TargetCount = 1;
+	Report.Effects.OpCount = Request.Ops.Num();
+	Report.Effects.bTypedPayloadSealed = true;
+	Report.Effects.bWouldTransactionOnce = true;
+	Report.Effects.bWouldCompileOnce = Request.bCompile;
+	Report.Effects.bWouldSaveOnce = Request.bSave;
+	Report.Effects.bWouldValidateOnce = true;
+	Report.Effects.bWouldFreshVerifyOnce = true;
 
-	TArray<UNiagaraScript*> Scripts;
-	TArray<UNiagaraGraph*> Graphs;
-	int32 GraphNodeCount = 0;
-	if (!CollectReachableScripts(*System, Scripts)
-		|| !CollectReachableGraphs(Scripts, Graphs, GraphNodeCount))
-	{
-		return Reject(TEXT("reference_proof_bound_exceeded"),
-			TEXT("Reachable script or graph bounds prevent complete rename collision proof."));
-	}
-	bool bDestinationReferenced = false;
-	if (!GraphContainsParameterName(Graphs, Request.Rename.NewName,
-		bDestinationReferenced) || bDestinationReferenced)
-	{
-		return Reject(TEXT("destination_reference_collision"),
-			TEXT("The destination name already occurs in an exact reachable Niagara graph."));
-	}
-	if (DeadlineExceeded())
-	{
-		return Reject(TEXT("planning_deadline_exceeded"),
-			TEXT("Bounded rename preflight exceeded its game-thread work budget."));
-	}
-	// UE 5.8's actual rename closure also touches the editor-only parameter adapter,
-	// reflected FNiagaraUserParameterBinding fields, renderer attribute bindings, and
-	// System/Emitter HandleVariableRenamed domains (including renderer/simulation-stage
-	// state). The public upstream discovery helpers materialize arrays and reflect fields
-	// before a caller can cap them, so they cannot serve as hard-bounded proof here.
-	const bool bFullReferenceInventoryComplete = AreFullReferenceDomainsProven(
-		/*bExposedStore=*/true,
-		/*bGraphMetadataAndPins=*/true,
-		/*bEditorOnlyParameterAdapter=*/false,
-		/*bUserParameterBindings=*/false,
-		/*bRendererAttributeBindings=*/false,
-		/*bSystemEmitterHandleRenameClosure=*/false,
-		/*bReflectionAndCollectionsBoundedBeforeMaterialization=*/false);
-	if (bFullReferenceInventoryComplete)
-	{
-		return Reject(TEXT("reference_inventory_contract_error"),
-			TEXT("The v1 source cohort cannot admit a full-reference proof without a new bounded immutable inventory implementation and fixtures."));
-	}
 	if (Request.bDryRun)
 	{
-		return Reject(FullReferenceInventoryState,
-			TEXT("Store and graph collision checks passed, but UE 5.8 rename also reaches editor-only parameters, user bindings, renderer attribute bindings, and system/emitter rename closure. Those domains lack a bounded immutable inventory, so dry-run validity is not claimed."));
+		Report.bOk = true;
+		Report.Status = TEXT("planned");
+		Report.Diagnostic = TEXT("Nothing changed. To apply, resubmit the same request with bDryRun false, a new operation_id, and expected_plan_hash set to plan_hash.");
+		return Report;
 	}
-	return Reject(NonDryCallableState,
-		TEXT("No Niagara mutation was prepared, staged, or submitted. In addition to the generic async continuation host, execution requires a bounded immutable full-reference inventory; upstream reflection/binding helpers materialize results before caller bounds."));
+	if (Request.ExpectedPlanHash != Payload->SemanticFingerprint)
+	{
+		return Reject(TEXT("plan_hash_mismatch"),
+			TEXT("The plan changed since its dry run (ops, target state, or catalog). Dry-run again and review it."));
+	}
+
+	FHyperAIStudioTypedArtifactStageReceipt Receipt;
+	FHyperAIStudioTrustedExecutionDiagnostic StageStatus;
+	FString StageError;
+	if (!FHyperAIStudioTrustedExecutionFacade::StageExact(Prepared, Request.OperationId, Receipt, StageStatus, StageError))
+	{
+		return Reject(StageStatus.StatusCode.IsEmpty() ? FString(TEXT("stage_failed")) : StageStatus.StatusCode,
+			StageError.IsEmpty() ? StageStatus.Diagnostic : StageError);
+	}
+	Report.bStaged = true;
+
+	FHyperAIStudioTypedArtifactSubmissionReceipt Submission;
+	FHyperAIStudioTrustedExecutionDiagnostic SubmitStatus;
+	FString SubmitError;
+	// Edit is tokenless; only risky safety classes need a server-issued grant.
+	if (!FHyperAIStudioTrustedExecutionFacade::SubmitExact(Receipt, FString(), Submission, SubmitStatus, SubmitError))
+	{
+		Report.Status = SubmitStatus.StatusCode.IsEmpty() ? FString(TEXT("submit_failed")) : SubmitStatus.StatusCode;
+		Report.Diagnostic = SubmitError.IsEmpty() ? SubmitStatus.Diagnostic : SubmitError;
+		return Report;
+	}
+	Report.bExecutionSubmitted = true;
+	Report.bOk = true;
+	Report.Status = TEXT("submitted");
+	Report.Diagnostic = TEXT("The edit runs over the next editor ticks: apply, compile, validate, save, verify. Poll hyper_operation_status with operation_id until it is terminal.");
+	return Report;
 }
 
 FHyperAINiagaraInspectReport UHyperAIStudioNiagaraToolset::hyper_niagara_inspect(
@@ -2167,20 +1918,19 @@ FHyperAIStudioDomainAdapterResult FHyperAIStudioNiagaraDomainAdapter::Execute(
 	if (Context.Binding.ToolName == TEXT("hyper_niagara_apply_plan")
 		&& Context.Binding.VariantId == FHyperAIStudioNiagaraContracts::MutationVariantId
 		&& Context.Safety == EHyperAIStudioDomainSafety::Edit
-		&& Payload.GetTypeId() == FHyperAIStudioNiagaraContracts::RenamePayloadTypeId
+		&& Payload.GetTypeId() == FHyperAIStudioNiagaraContracts::EditOpsPayloadTypeId
 		&& Payload.GetSchemaFingerprint()
-			== FHyperAIStudioNiagaraContracts::RenamePayloadSchemaFingerprint())
+			== FHyperAIStudioNiagaraContracts::EditOpsPayloadSchemaFingerprint())
 	{
-		const FHyperAIStudioNiagaraRenamePayload& Typed =
-			static_cast<const FHyperAIStudioNiagaraRenamePayload&>(Payload);
-		if (FHyperAIStudioNiagaraContracts::ComputeRenameSemanticFingerprint(Typed)
+		const FHyperAIStudioNiagaraEditOpsPayload& Typed =
+			static_cast<const FHyperAIStudioNiagaraEditOpsPayload&>(Payload);
+		if (FHyperAIStudioNiagaraContracts::ComputeEditOpsSemanticFingerprint(Typed)
 			!= Typed.SemanticFingerprint)
 		{
 			return Reject(TEXT("typed_payload_drift"),
-				TEXT("The exact typed rename semantic fingerprint drifted."));
+				TEXT("The sealed edit-ops semantic fingerprint drifted."));
 		}
-		return Reject(FHyperAIStudioNiagaraContracts::NonDryCallableState,
-			TEXT("No Niagara effect ran. This synchronous adapter cannot begin, poll, cancel, compile, save, validate, or reconcile a rename."));
+		return HyperAIStudio::Niagara::Private::ExecuteEditPhase(Context.ActionKind, Typed);
 	}
 	return Reject(TEXT("typed_binding_mismatch"),
 		TEXT("Niagara adapter rejected a non-exact tool, variant, safety, schema, or DTO binding."));
@@ -2204,17 +1954,17 @@ bool FHyperAIStudioNiagaraFreshVerifier::ResolveCanonicalEffectTarget(
 {
 	OutCanonicalEffectTarget.Reset();
 	OutError.Reset();
-	if (Request.GetTypeId() != FHyperAIStudioNiagaraContracts::RenamePayloadTypeId
+	if (Request.GetTypeId() != FHyperAIStudioNiagaraContracts::EditOpsPayloadTypeId
 		|| Request.GetSchemaFingerprint()
-			!= FHyperAIStudioNiagaraContracts::RenamePayloadSchemaFingerprint())
+			!= FHyperAIStudioNiagaraContracts::EditOpsPayloadSchemaFingerprint())
 	{
 		OutError = TEXT("Fresh verifier received the wrong typed Niagara request schema.");
 		return false;
 	}
-	const FHyperAIStudioNiagaraRenamePayload& Typed =
-		static_cast<const FHyperAIStudioNiagaraRenamePayload&>(Request);
+	const FHyperAIStudioNiagaraEditOpsPayload& Typed =
+		static_cast<const FHyperAIStudioNiagaraEditOpsPayload&>(Request);
 	if (!FHyperAIStudioNiagaraContracts::IsCanonicalProjectObjectPath(Typed.TargetPath)
-		|| FHyperAIStudioNiagaraContracts::ComputeRenameSemanticFingerprint(Typed)
+		|| FHyperAIStudioNiagaraContracts::ComputeEditOpsSemanticFingerprint(Typed)
 			!= Typed.SemanticFingerprint)
 	{
 		OutError = TEXT("Fresh verifier rejected the canonical target or semantic seal.");
@@ -2238,13 +1988,6 @@ bool FHyperAIStudioNiagaraFreshVerifier::VerifyFreshExact(
 		OutError = TEXT("Fresh Niagara verification requires the game thread.");
 		return false;
 	}
-	const TArray<FHyperAINiagaraCapabilityStatus> Capabilities =
-		FHyperAIStudioNiagaraContracts::GetCapabilityMatrix();
-	if (Capabilities.Num() != 1 || !Capabilities[0].bIndependentValidationImplemented)
-	{
-		OutError = TEXT("native_rule_execution_not_hard_bounded");
-		return false;
-	}
 	FString CanonicalTarget;
 	if (!ResolveCanonicalEffectTarget(Request, CanonicalTarget, OutError)
 		|| Result.GetTypeId() != FHyperAIStudioNiagaraContracts::MutationResultTypeId
@@ -2254,51 +1997,40 @@ bool FHyperAIStudioNiagaraFreshVerifier::VerifyFreshExact(
 		if (OutError.IsEmpty()) OutError = TEXT("Fresh verifier received the wrong result schema.");
 		return false;
 	}
-	const FHyperAIStudioNiagaraRenamePayload& Typed =
-		static_cast<const FHyperAIStudioNiagaraRenamePayload&>(Request);
+	const FHyperAIStudioNiagaraEditOpsPayload& Typed =
+		static_cast<const FHyperAIStudioNiagaraEditOpsPayload&>(Request);
 	const FHyperAIStudioNiagaraMutationResultPayload& TypedResult =
 		static_cast<const FHyperAIStudioNiagaraMutationResultPayload&>(Result);
 	if (TypedResult.Phase != TEXT("completed") || !TypedResult.bValid
 		|| !FHyperAIStudioNiagaraContracts::IsCanonicalSha256(TypedResult.Revision))
 	{
-		OutError = TEXT("Only a terminal completed async result may enter fresh verification.");
+		OutError = TEXT("Only a completed fresh-capture result may be verified.");
 		return false;
 	}
-	FHyperAIStudioNiagaraValueSnapshot Snapshot;
-	FString Status;
-	FString Diagnostic;
-	if (!FHyperAIStudioNiagaraContracts::CaptureExact(CanonicalTarget,
-		FHyperAIStudioNiagaraContracts::MaxMutationGameThreadMs,
-		Snapshot, Status, Diagnostic)
-		|| !Snapshot.bComplete || Snapshot.Health.Revision == Typed.BaseRevision
-		|| Snapshot.Health.Revision != TypedResult.Revision
-		|| Snapshot.Health.bPackageDirty || Snapshot.Health.bCompileActive
-		|| Snapshot.Health.bCompileStale || Snapshot.Health.bCompileHasErrors)
+	const UNiagaraSystem* System = Cast<UNiagaraSystem>(FSoftObjectPath(CanonicalTarget).ResolveObject());
+	if (!System)
 	{
-		OutError = TEXT("Post-mutation exact saved CAS or terminal compile proof is missing.");
+		OutError = TEXT("The edited System is no longer loaded.");
 		return false;
 	}
-	const FHyperAINiagaraUserParameterIdentity* Current =
-		FindParameterByGuid(Snapshot.Parameters, Typed.ExpectedVariableGuid);
-	if (!Current || Current->Name != Typed.NewName
-		|| Current->TypeFingerprint != Typed.TypeFingerprint
-		|| Current->DefaultFingerprint != Typed.DefaultFingerprint
-		|| Snapshot.Parameters.ContainsByPredicate([&](const FHyperAINiagaraUserParameterIdentity& Item)
-		{
-			return Item.Name == Typed.OldName;
-		}))
+	// Content identity, not the compile-sensitive revision: an async compile may finish between capture and here.
+	const FString ContentKey = ContentKeyOf(*System);
+	if (ContentKey != TypedResult.Revision)
 	{
-		OutError = TEXT("Fresh state does not prove one GUID-stable, type/default-preserving rename.");
+		OutError = TEXT("The System changed between fresh capture and verification.");
+		return false;
+	}
+	if (Typed.bSave == System->GetOutermost()->IsDirty())
+	{
+		OutError = Typed.bSave
+			? TEXT("The System still has unsaved changes after the save phase.")
+			: TEXT("The unsaved edit is no longer present in memory.");
 		return false;
 	}
 	FString Canonical;
-	AppendToken(Canonical, TEXT("hyperai.niagara.rename-postcondition.v1"));
+	AppendToken(Canonical, TEXT("hyperai.niagara.edit-ops-postcondition.v1"));
 	AppendToken(Canonical, Typed.SemanticFingerprint);
-	AppendToken(Canonical, Snapshot.Health.Revision);
-	AppendToken(Canonical, Current->VariableGuid);
-	AppendToken(Canonical, Current->Name);
-	AppendToken(Canonical, Current->TypeFingerprint);
-	AppendToken(Canonical, Current->DefaultFingerprint);
+	AppendToken(Canonical, ContentKey);
 	OutPostconditionHash = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(Canonical);
 	if (!FHyperAIStudioNiagaraContracts::IsCanonicalSha256(OutPostconditionHash))
 	{
@@ -2383,21 +2115,25 @@ void FHyperAIStudioNiagaraRegistration::RegisterAfterEngineInit()
 		RollBackRegistration();
 		return;
 	}
-	FHyperAIStudioTrustedProbeResult Observation;
-	Observation.bReady = FModuleManager::Get().IsModuleLoaded(TEXT("Niagara"))
-		&& FModuleManager::Get().IsModuleLoaded(TEXT("NiagaraEditor"))
-		&& HyperAIStudio::Niagara::Private::GetLoadedNiagaraEditorModule() != nullptr
-		&& UNiagaraSystem::StaticClass() != nullptr;
-	Observation.StatusCode = Observation.bReady
-		? TEXT("ready_loaded_only") : TEXT("required_module_not_loaded");
-	Observation.Diagnostic = Observation.bReady
-		? TEXT("Niagara and NiagaraEditor are already loaded; no module was loaded by the probe.")
-		: TEXT("Niagara source cohort remains unavailable without already-loaded required modules.");
-	if (!Observation.bReady
-		|| !FHyperAIStudioTrustedExecutionFacade::PublishLiveProbeExact(
-			ProbeHandle, Observation, Error))
+	const auto ObserveNiagaraEditor = []()
 	{
-		if (Error.IsEmpty()) Error = Observation.Diagnostic;
+		FHyperAIStudioTrustedProbeResult Observation;
+		Observation.bReady = FModuleManager::Get().IsModuleLoaded(TEXT("Niagara"))
+			&& FModuleManager::Get().IsModuleLoaded(TEXT("NiagaraEditor"))
+			&& HyperAIStudio::Niagara::Private::GetLoadedNiagaraEditorModule() != nullptr
+			&& UNiagaraSystem::StaticClass() != nullptr
+			&& HyperAIStudio::Niagara::ExternalEditGate::IsApiAvailable();
+		Observation.StatusCode = Observation.bReady
+			? TEXT("ready_loaded_only") : TEXT("required_module_not_loaded");
+		Observation.Diagnostic = Observation.bReady
+			? TEXT("Niagara, NiagaraEditor and the external-edit API are loaded; no module was loaded by the probe.")
+			: TEXT("Niagara source cohort remains unavailable without already-loaded required modules.");
+		return Observation;
+	};
+	const FHyperAIStudioTrustedProbeResult FirstObservation = ObserveNiagaraEditor();
+	if (!FirstObservation.bReady || !ProbePublisher.Start(ProbeHandle, ObserveNiagaraEditor, Error))
+	{
+		if (Error.IsEmpty()) Error = FirstObservation.Diagnostic;
 		UE_LOG(LogHyperAIStudioNiagara, Error,
 			TEXT("Niagara live-probe publication failed closed: %s"), *Error);
 		RollBackRegistration();
@@ -2437,6 +2173,7 @@ void FHyperAIStudioNiagaraRegistration::RollBackRegistration()
 			bOwnsToolset = false;
 		}
 	}
+	ProbePublisher.Stop();
 	if (ProbeHandle.IsValid())
 	{
 		FString Error;

@@ -161,6 +161,19 @@
 			]
 		},
 		{
+			"Name": "HyperAIStudioTextureGraph",
+			"Type": "Editor",
+			"LoadingPhase": "None",
+			"PlatformAllowList": [
+				"Win64"
+			],
+			"AdditionalDependencies": [
+				"Core",
+				"CoreUObject",
+				"Engine"
+			]
+		},
+		{
 			"Name": "HyperAIStudioPCG",
 			"Type": "Editor",
 			"LoadingPhase": "None",
@@ -354,6 +367,10 @@
 		},
 		{
 			"Name": "PCG",
+			"Enabled": false
+		},
+		{
+			"Name": "TextureGraph",
 			"Enabled": false
 		},
 		{

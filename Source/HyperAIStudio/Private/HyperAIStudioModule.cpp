@@ -32,6 +32,7 @@
 #include "HyperAIStudioContextSearchToolsets.h"
 #include "HyperAIStudioDiagnosticsRegistration.h"
 #include "HyperAIStudioExtensionRuntime.h"
+#include "HyperAIStudioFoundationProbe.h"
 #include "HyperAIStudioNativeReadToolset.h"
 #include "HyperAIStudioPIEPlaytestToolset.h"
 #include "HyperAIStudioPlanExecuteToolset.h"
@@ -537,6 +538,9 @@ public:
 			DiagnosticsRegistration->Startup();
 			PIEPlaytestRegistration = MakeUnique<FHyperAIStudioPIEPlaytestRegistration>();
 			PIEPlaytestRegistration->Startup();
+			// Every optional pack's typed mutation requires this probe to be live and fresh.
+			FoundationProbe = MakeUnique<FHyperAIStudioFoundationProbe>();
+			FoundationProbe->Startup();
 			LoadAvailableCapabilityModules();
 		}
 #if WITH_DEV_AUTOMATION_TESTS
@@ -826,6 +830,11 @@ public:
 
 		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(HyperAIStudioTabName);
 		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(HyperAIStudioChatTabName);
+		if (FoundationProbe)
+		{
+			FoundationProbe->Shutdown();
+			FoundationProbe.Reset();
+		}
 		HyperAIStudio::TrustedExecution::Private::ShutdownCore();
 		// Last: the spawners unregistered above held raw brush pointers into the style set.
 		FHyperAIStudioStyle::Unregister();
@@ -922,6 +931,14 @@ private:
 				{TEXT("hyper_niagara_inspect"), TEXT("hyper_niagara_apply_plan"),
 					TEXT("hyper_niagara_validate")},
 				{TEXT("Niagara")}
+			},
+			{
+				TEXT("HyperAIStudioTextureGraph"),
+				TEXT("texture_graph"),
+				TEXT("cohort.source.hyperaistudiotexturegraphtoolset.v1"),
+				{TEXT("hyper_texture_graph_inspect"), TEXT("hyper_texture_graph_apply_plan"),
+					TEXT("hyper_texture_graph_validate")},
+				{TEXT("TextureGraph")}
 			},
 			{
 				TEXT("HyperAIStudioPCG"),
@@ -6030,6 +6047,7 @@ private:
 	TUniquePtr<FHyperAIStudioBlueprintWorkflowRegistration> BlueprintWorkflowRegistration;
 	TUniquePtr<FHyperAIStudioDiagnosticsRegistration> DiagnosticsRegistration;
 	TUniquePtr<FHyperAIStudioPIEPlaytestRegistration> PIEPlaytestRegistration;
+	TUniquePtr<FHyperAIStudioFoundationProbe> FoundationProbe;
 	FDelegateHandle EnginePreExitHandle;
 	TUniquePtr<FAutoConsoleCommand> CommandSetUp;
 	TUniquePtr<FAutoConsoleCommand> CommandGenerateFiles;
