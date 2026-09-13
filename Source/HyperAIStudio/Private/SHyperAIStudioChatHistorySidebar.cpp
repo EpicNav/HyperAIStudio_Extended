@@ -1,0 +1,261 @@
+// Games by Hyper 2026.
+
+#include "SHyperAIStudioChatHistorySidebar.h"
+
+#include "Async/Async.h"
+#include "HyperAIStudioService.h"
+#include "HyperAIStudioStyle.h"
+#include "Styling/AppStyle.h"
+#include "Styling/StyleColors.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SSearchBox.h"
+#include "Widgets/Layout/SBorder.h"
+#include "Widgets/SBoxPanel.h"
+#include "Widgets/Text/STextBlock.h"
+#include "Widgets/Views/STableRow.h"
+
+#define LOCTEXT_NAMESPACE "SHyperAIStudioChatHistorySidebar"
+
+namespace HyperAIStudio::ChatHistorySidebar
+{
+	FText RelativeTime(const FDateTime& Utc)
+	{
+		const FTimespan Age = FDateTime::UtcNow() - Utc;
+		if (Age.GetTotalMinutes() < 60.0)
+		{
+			return FText::Format(LOCTEXT("MinutesAgo", "{0}m ago"), FMath::Max(1, FMath::FloorToInt(Age.GetTotalMinutes())));
+		}
+		if (Age.GetTotalHours() < 24.0)
+		{
+			return FText::Format(LOCTEXT("HoursAgo", "{0}h ago"), FMath::FloorToInt(Age.GetTotalHours()));
+		}
+		return FText::Format(LOCTEXT("DaysAgo", "{0}d ago"), FMath::FloorToInt(Age.GetTotalDays()));
+	}
+
+	/** Heading for a chat last active at Utc, by the viewer's local calendar day, newest groups first. */
+	FText DateGroup(const FDateTime& Utc)
+	{
+		const FTimespan LocalOffset = FDateTime::Now() - FDateTime::UtcNow();
+		const FDateTime LocalDay = (Utc + LocalOffset).GetDate();
+		const int32 DaysAgo = (FDateTime::Now().GetDate() - LocalDay).GetDays();
+		if (DaysAgo <= 0)
+		{
+			return LOCTEXT("GroupToday", "Today");
+		}
+		if (DaysAgo == 1)
+		{
+			return LOCTEXT("GroupYesterday", "Yesterday");
+		}
+		if (DaysAgo < 7)
+		{
+			return LOCTEXT("GroupWeek", "Previous 7 Days");
+		}
+		if (DaysAgo < 30)
+		{
+			return LOCTEXT("GroupMonth", "Previous 30 Days");
+		}
+		return FText::FromString(LocalDay.ToString(TEXT("%B %Y")));
+	}
+
+	TSharedRef<SWidget> IconButton(const FName Icon, const FText& ToolTip, FSimpleDelegate OnClicked)
+	{
+		return SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ToolTipText(ToolTip)
+			.OnClicked_Lambda([OnClicked]()
+			{
+				OnClicked.ExecuteIfBound();
+				return FReply::Handled();
+			})
+			[
+				SNew(SImage)
+				.Image(FAppStyle::GetBrush(Icon))
+				.ColorAndOpacity(FSlateColor::UseForeground())
+			];
+	}
+}
+
+void SHyperAIStudioChatHistorySidebar::Construct(const FArguments& InArgs)
+{
+	using namespace HyperAIStudio::ChatHistorySidebar;
+	OnResumeChat = InArgs._OnResumeChat;
+	OnClose = InArgs._OnClose;
+	ActiveSessionId = InArgs._ActiveSessionId;
+
+	ChildSlot
+	[
+		SNew(SBorder)
+		.BorderImage(FHyperAIStudioStyle::Get().GetBrush("HyperAIStudio.Panel"))
+		.Padding(8.0f)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.0f)
+				.VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("Title", "Chats"))
+					.TextStyle(FHyperAIStudioStyle::Get(), "HyperAIStudio.Text.Title")
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					IconButton("Icons.Refresh", LOCTEXT("RefreshTooltip", "Re-read chat history"),
+						FSimpleDelegate::CreateSP(this, &SHyperAIStudioChatHistorySidebar::Refresh))
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					IconButton("Icons.X", LOCTEXT("CloseTooltip", "Hide chat history"), OnClose)
+				]
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(0.0f, 8.0f, 0.0f, 6.0f)
+			[
+				SNew(SSearchBox)
+				.HintText(LOCTEXT("SearchHint", "Search chats"))
+				.OnTextChanged_Lambda([this](const FText& Text)
+				{
+					Filter = Text.ToString();
+					RebuildFiltered();
+				})
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			[
+				SNew(STextBlock)
+				.AutoWrapText(true)
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				.Visibility_Lambda([this]() { return Filtered.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed; })
+				.Text_Lambda([this]()
+				{
+					if (bLoading)
+					{
+						return LOCTEXT("Loading", "Reading chat history...");
+					}
+					return Filter.IsEmpty()
+						? LOCTEXT("Empty", "No Claude Code or Codex chats have run in this project yet.")
+						: LOCTEXT("NoMatch", "No chats match.");
+				})
+			]
+			+ SVerticalBox::Slot()
+			.FillHeight(1.0f)
+			[
+				SAssignNew(List, SListView<FRowPtr>)
+				.ListItemsSource(&Filtered)
+				// Rows only report clicks when selectable: STableRow takes mouse capture, and so fires the click, only then.
+				.SelectionMode(ESelectionMode::Single)
+				.OnIsSelectableOrNavigable_Lambda([](FRowPtr Row) { return Row.IsValid() && Row->Session.IsValid(); })
+				.OnGenerateRow(this, &SHyperAIStudioChatHistorySidebar::GenerateRow)
+				.OnMouseButtonClick_Lambda([this](FRowPtr Row)
+				{
+					if (Row.IsValid() && Row->Session.IsValid())
+					{
+						OnResumeChat.ExecuteIfBound(*Row->Session);
+					}
+				})
+			]
+		]
+	];
+}
+
+void SHyperAIStudioChatHistorySidebar::Refresh()
+{
+	if (bLoading)
+	{
+		return;
+	}
+	bLoading = true;
+	// Session files can be tens of megabytes; read them off the game thread.
+	TWeakPtr<SHyperAIStudioChatHistorySidebar> WeakThis = SharedThis(this);
+	Async(EAsyncExecution::ThreadPool, [WeakThis, Root = FHyperAIStudioService::GetProjectRoot()]()
+	{
+		TArray<FHyperAIStudioChatSession> Loaded = HyperAIStudio::ChatHistory::ListSessions(Root);
+		AsyncTask(ENamedThreads::GameThread, [WeakThis, Loaded = MoveTemp(Loaded)]() mutable
+		{
+			if (const TSharedPtr<SHyperAIStudioChatHistorySidebar> Pinned = WeakThis.Pin())
+			{
+				Pinned->Sessions = MoveTemp(Loaded);
+				Pinned->bLoading = false;
+				Pinned->RebuildFiltered();
+			}
+		});
+	});
+}
+
+void SHyperAIStudioChatHistorySidebar::RebuildFiltered()
+{
+	// Sessions arrive newest first, so each date group is contiguous: emit a heading whenever the group changes.
+	Filtered.Reset();
+	FString CurrentGroup;
+	for (const FHyperAIStudioChatSession& Session : Sessions)
+	{
+		if (!Filter.IsEmpty() && !Session.Title.Contains(Filter) && !Session.AgentName.Contains(Filter))
+		{
+			continue;
+		}
+		const FText Group = HyperAIStudio::ChatHistorySidebar::DateGroup(Session.LastActiveUtc);
+		if (Filtered.IsEmpty() || Group.ToString() != CurrentGroup)
+		{
+			CurrentGroup = Group.ToString();
+			Filtered.Add(MakeShared<FRow>(FRow{Group, nullptr}));
+		}
+		Filtered.Add(MakeShared<FRow>(FRow{FText::GetEmpty(), MakeShared<FHyperAIStudioChatSession>(Session)}));
+	}
+	if (List.IsValid())
+	{
+		List->RequestListRefresh();
+	}
+}
+
+TSharedRef<ITableRow> SHyperAIStudioChatHistorySidebar::GenerateRow(FRowPtr Row, const TSharedRef<STableViewBase>& OwnerTable)
+{
+	if (!Row->Session.IsValid())
+	{
+		return SNew(STableRow<FRowPtr>, OwnerTable)
+			.Style(FAppStyle::Get(), "TableView.NoHoverTableRow")
+			.ShowSelection(false)
+			.Padding(FMargin(6.0f, Filtered.Num() > 0 && Filtered[0] == Row ? 2.0f : 12.0f, 6.0f, 4.0f))
+			[
+				SNew(STextBlock)
+				.Text(Row->Heading)
+				.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			];
+	}
+	const TSharedPtr<FHyperAIStudioChatSession> Session = Row->Session;
+	const FString SessionId = Session->SessionId;
+	auto IsActive = [this, SessionId]() { return !SessionId.IsEmpty() && ActiveSessionId.Get(FString()) == SessionId; };
+	return SNew(STableRow<FRowPtr>, OwnerTable)
+		.Padding(FMargin(6.0f, 5.0f))
+		.ToolTipText(FText::Format(LOCTEXT("RowTooltip", "{0}\nResume in {1}"), FText::FromString(Session->Title), FText::FromString(Session->AgentName)))
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(Session->Title))
+				.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+				.ColorAndOpacity_Lambda([IsActive]() { return IsActive() ? FStyleColors::AccentBlue : FSlateColor::UseForeground(); })
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(0.0f, 2.0f, 0.0f, 0.0f)
+			[
+				SNew(STextBlock)
+				.Text(FText::Format(LOCTEXT("RowMeta", "{0} - {1}"),
+					FText::FromString(Session->AgentName), HyperAIStudio::ChatHistorySidebar::RelativeTime(Session->LastActiveUtc)))
+				.Font(FAppStyle::GetFontStyle("SmallFont"))
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			]
+		];
+}
+
+#undef LOCTEXT_NAMESPACE

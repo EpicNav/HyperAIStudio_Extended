@@ -11,7 +11,13 @@
 #include "ISettingsModule.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
-#include "SHyperAIStudioPromptComposer.h"
+#include "Dom/JsonObject.h"
+#include "HAL/FileManager.h"
+#include "Interfaces/IPluginManager.h"
+#include "Misc/FileHelper.h"
+#include "SHyperAIStudioChatHistorySidebar.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "STerminal.h"
 #include "Styling/AppStyle.h"
 #include "Styling/StyleColors.h"
@@ -64,9 +70,51 @@ namespace HyperAIStudio::QuickAction
 		}
 	}
 
+	constexpr float ChatSidebarWidth = 280.0f;
+
+	/**
+	 * The terminal paints its colour scheme's background; the frame around it takes the same colour so the padding
+	 * blends in. The Terminal plugin keeps its parsed schemes private, so read the selected scheme's JSON directly.
+	 */
+	FLinearColor TerminalBackgroundColor()
+	{
+		static FString CachedSchemeName;
+		static FColor CachedBackground(0x1E, 0x1E, 0x1E);
+		const UTerminalSettings* Settings = GetDefault<UTerminalSettings>();
+		const FString SchemeName = Settings ? Settings->ColorSchemeName : FString(TEXT("Default"));
+		if (SchemeName != CachedSchemeName)
+		{
+			CachedSchemeName = SchemeName;
+			CachedBackground = FColor(0x1E, 0x1E, 0x1E);
+			const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("Terminal"));
+			const FString Directory = Plugin ? Plugin->GetBaseDir() / TEXT("Config") / TEXT("ColorSchemes") : FString();
+			TArray<FString> Files;
+			if (!Directory.IsEmpty() && SchemeName != TEXT("Default"))
+			{
+				IFileManager::Get().FindFiles(Files, *(Directory / TEXT("*.json")), true, false);
+			}
+			for (const FString& File : Files)
+			{
+				FString Json;
+				TSharedPtr<FJsonObject> Scheme;
+				FString Name;
+				FString Hex;
+				if (FFileHelper::LoadFileToString(Json, *(Directory / File))
+					&& FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Scheme) && Scheme.IsValid()
+					&& Scheme->TryGetStringField(TEXT("name"), Name) && Name == SchemeName
+					&& Scheme->TryGetStringField(TEXT("defaultBackground"), Hex))
+				{
+					CachedBackground = FColor::FromHex(Hex);
+					break;
+				}
+			}
+		}
+		return FLinearColor(CachedBackground);
+	}
+
 	FText InitialReadyMessage()
 	{
-		return LOCTEXT("InitialReadyMessage", "Message the agent from the box under the terminal: Enter sends, Shift+Enter adds a line, the history button resumes a past chat. Copy Prompt is only for manual handoff/context fallback.");
+		return LOCTEXT("InitialReadyMessage", "Type to the agent in the terminal: Enter sends, Shift+Enter adds a line. The Chats button resumes a past conversation. Copy Prompt is only for manual handoff/context fallback.");
 	}
 
 	FText InitialSetupMessage()
@@ -172,8 +220,9 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 	ResetTranscript();
 	SAssignNew(TerminalScrollBar, SScrollBar)
 		.Orientation(Orient_Vertical)
-		.AlwaysShowScrollbar(true)
-		.Thickness(FVector2D(6.0f, 6.0f));
+		.AlwaysShowScrollbar(false)
+		.Thickness(FVector2D(5.0f, 5.0f));
+	ChatSidebarCurve = FCurveSequence(0.0f, 0.2f, ECurveEaseFunction::CubicOut);
 
 	ChildSlot
 	[
@@ -188,75 +237,87 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 				BuildHeader()
 			]
 			+ SVerticalBox::Slot()
-			.AutoHeight()
-			[
-				BuildStatusLine()
-			]
-			+ SVerticalBox::Slot()
-			.AutoHeight()
+			.FillHeight(1.0f)
 			.Padding(0.0f, 10.0f, 0.0f, 0.0f)
 			[
-				BuildAgentActions()
-			]
-			+ SVerticalBox::Slot()
-			.FillHeight(1.0f)
-			.Padding(0.0f, 8.0f, 0.0f, 0.0f)
-			[
-				SNew(SBorder)
-				.BorderImage(FHyperAIStudioStyle::Get().GetBrush("HyperAIStudio.Panel"))
-				.Padding(6.0f)
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
 				[
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot()
-					.FillHeight(1.0f)
+					// Width and opacity follow the curve; the clip hides content while it slides in or out.
+					SNew(SBox)
+					.WidthOverride_Lambda([this]() { return HyperAIStudio::QuickAction::ChatSidebarWidth * ChatSidebarCurve.GetLerp(); })
+					.Visibility_Lambda([this]() { return ChatSidebarCurve.GetLerp() > 0.0f ? EVisibility::Visible : EVisibility::Collapsed; })
+					.Clipping(EWidgetClipping::ClipToBounds)
 					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot()
-						.FillWidth(1.0f)
+						SNew(SBorder)
+						.BorderImage(FAppStyle::GetBrush(TEXT("NoBorder")))
+						.Padding(FMargin(0.0f, 0.0f, 10.0f, 0.0f))
+						.ColorAndOpacity_Lambda([this]() { return FLinearColor(1.0f, 1.0f, 1.0f, ChatSidebarCurve.GetLerp()); })
 						[
-							SAssignNew(TerminalHost, SBox)
-							[
-								BuildTerminalSessionWidget()
-							]
-						]
-						+ SHorizontalBox::Slot()
-						.AutoWidth()
-						[
-							TerminalScrollBar.ToSharedRef()
+							SAssignNew(ChatSidebar, SHyperAIStudioChatHistorySidebar)
+							.OnResumeChat(this, &SHyperAIStudioQuickActionWindow::ResumeChat)
+							.OnClose(this, &SHyperAIStudioQuickActionWindow::ToggleChatSidebar)
+							.ActiveSessionId_Lambda([this]() { return ActiveChatSessionId; })
 						]
 					]
 				]
-			]
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(0.0f, 8.0f, 0.0f, 0.0f)
-			[
-				SAssignNew(PromptComposer, SHyperAIStudioPromptComposer)
-				.OnSubmit(this, &SHyperAIStudioQuickActionWindow::SubmitComposerText)
-				.OnEscape_Lambda([this]()
-				{
-					if (TerminalWidget.IsValid())
-					{
-						FSlateApplication::Get().SetKeyboardFocus(TerminalWidget, EFocusCause::SetDirectly);
-					}
-				})
-				.OnResumeChat(this, &SHyperAIStudioQuickActionWindow::ResumeChat)
-				.InputEnabled_Lambda([this]() { return TerminalWidget.IsValid() && TerminalWidget->IsSessionRunning(); })
-			]
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(0.0f, 8.0f, 0.0f, 0.0f)
-			[
-				BuildSessionLog()
-			]
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(0.0f, 8.0f, 0.0f, 0.0f)
-			[
-				SNew(STextBlock)
-				.Text_Lambda([this]() { return LastMessage; })
-				.AutoWrapText(true)
-				.ColorAndOpacity(HyperAIStudio::QuickAction::MutedColor())
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.0f)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					[
+						BuildStatusLine()
+					]
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					[
+						BuildAgentActions()
+					]
+					+ SVerticalBox::Slot()
+					.FillHeight(1.0f)
+					.Padding(0.0f, 8.0f, 0.0f, 0.0f)
+					[
+						SNew(SBorder)
+						.BorderImage(FHyperAIStudioStyle::Get().GetBrush("HyperAIStudio.TerminalFrame"))
+						.BorderBackgroundColor_Lambda([]() { return FSlateColor(HyperAIStudio::QuickAction::TerminalBackgroundColor()); })
+						.Padding(FMargin(12.0f, 10.0f, 4.0f, 10.0f))
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot()
+							.FillWidth(1.0f)
+							[
+								SAssignNew(TerminalHost, SBox)
+								[
+									BuildTerminalSessionWidget()
+								]
+							]
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.Padding(4.0f, 0.0f, 0.0f, 0.0f)
+							[
+								TerminalScrollBar.ToSharedRef()
+							]
+						]
+					]
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					.Padding(0.0f, 8.0f, 0.0f, 0.0f)
+					[
+						BuildSessionLog()
+					]
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					.Padding(0.0f, 6.0f, 0.0f, 0.0f)
+					[
+						SNew(STextBlock)
+						.Text_Lambda([this]() { return LastMessage; })
+						.AutoWrapText(true)
+						.ColorAndOpacity(HyperAIStudio::QuickAction::MutedColor())
+					]
+				]
 			]
 		]
 	];
@@ -417,51 +478,6 @@ FReply SHyperAIStudioQuickActionWindow::OnPreviewKeyDown(const FGeometry& MyGeom
 	return SCompoundWidget::OnPreviewKeyDown(MyGeometry, InKeyEvent);
 }
 
-bool SHyperAIStudioQuickActionWindow::SubmitComposerText(const FString& Text)
-{
-	if (!TerminalWidget.IsValid() || !TerminalWidget->IsSessionRunning())
-	{
-		LastMessage = LOCTEXT("ComposerNoSession", "The embedded terminal is not running. Start the agent, then send again.");
-		return false;
-	}
-
-	const bool bMultiLine = Text.Contains(TEXT("\n"));
-	bool bSent = false;
-	if (HyperAIStudio::TerminalRawInput::IsAvailable())
-	{
-		// Without bracketed paste every newline is a real Enter, so a multi-line message would run line by line at a
-		// shell prompt. Agent TUIs switch bracketed paste on; its absence means no agent is listening.
-		if (bMultiLine && !HyperAIStudio::TerminalRawInput::IsBracketedPasteEnabled(*TerminalWidget))
-		{
-			LastMessage = LOCTEXT("ComposerNoAgentPrompt", "Nothing sent: no agent prompt is accepting multi-line input. Start the agent, or send a single line to the shell.");
-			AddTranscriptLine(LastMessage.ToString());
-			return false;
-		}
-		bSent = HyperAIStudio::TerminalRawInput::WriteText(*TerminalWidget, Text, true);
-	}
-	else if (!bMultiLine)
-	{
-		TerminalWidget->ExecuteCommand(Text);
-		bSent = true;
-	}
-
-	if (!bSent)
-	{
-		LastMessage = LOCTEXT("ComposerSendFailed", "Nothing sent: multi-line messages need raw terminal input, which is compiled out for this engine version.");
-		AddTranscriptLine(LastMessage.ToString());
-		return false;
-	}
-
-	FString Preview = Text.Left(80);
-	int32 NewlineIndex = INDEX_NONE;
-	if (Preview.FindChar(TEXT('\n'), NewlineIndex))
-	{
-		Preview.LeftInline(NewlineIndex);
-	}
-	AddTranscriptLine(FString::Printf(TEXT("You: %s%s"), *Preview, Preview.Len() < Text.Len() ? TEXT(" ...") : TEXT("")));
-	return true;
-}
-
 TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildSessionLog()
 {
 	return SNew(SExpandableArea)
@@ -481,9 +497,63 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildSessionLog()
 		];
 }
 
+void SHyperAIStudioQuickActionWindow::ToggleChatSidebar()
+{
+	bChatSidebarOpen = !bChatSidebarOpen;
+	if (bChatSidebarOpen && ChatSidebar.IsValid())
+	{
+		ChatSidebar->Refresh();
+	}
+	if (ChatSidebarCurve.IsPlaying())
+	{
+		ChatSidebarCurve.Reverse();
+	}
+	else if (bChatSidebarOpen)
+	{
+		ChatSidebarCurve.Play(AsShared());
+	}
+	else
+	{
+		ChatSidebarCurve.PlayReverse(AsShared());
+	}
+}
+
 TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildHeader()
 {
 	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(0.0f, 0.0f, 8.0f, 0.0f)
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ToolTipText(LOCTEXT("ChatsToggleTooltip", "Show or hide this project's past agent chats."))
+			.OnClicked_Lambda([this]()
+			{
+				ToggleChatSidebar();
+				return FReply::Handled();
+			})
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				[
+					SNew(SImage)
+					.Image(FAppStyle::GetBrush(TEXT("Icons.Recent")))
+					.ColorAndOpacity(FSlateColor::UseForeground())
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(4.0f, 0.0f, 0.0f, 0.0f)
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("ChatsToggle", "Chats"))
+				]
+			]
+		]
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
 		.VAlign(VAlign_Center)
@@ -1041,6 +1111,7 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunDeferredTerminalStart
 		}
 	}
 	TerminalWidget->ExecuteCommand(BuildTerminalBootstrapCommand(AgentName));
+	ActiveChatSessionId = ResumeAgentName.Equals(AgentName, ESearchCase::IgnoreCase) ? ResumeSessionId : FString();
 	ResumeAgentName.Reset();
 	ResumeSessionId.Reset();
 	bTerminalStartupSent = true;
@@ -1273,7 +1344,7 @@ FText SHyperAIStudioQuickActionWindow::GetNextActionTextForStatus(const FHyperAI
 {
 	if (InStatus.IsReady())
 	{
-		return LOCTEXT("ReadyNextAction", "Next useful action: message the embedded agent terminal from the box below. Copy Prompt is only for manual handoff fallback.");
+		return LOCTEXT("ReadyNextAction", "Next useful action: type to the embedded agent terminal. Copy Prompt is only for manual handoff fallback.");
 	}
 	if (bIsRefreshing || InStatus.bProbeInProgress)
 	{

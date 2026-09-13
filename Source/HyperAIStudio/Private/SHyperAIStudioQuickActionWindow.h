@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Animation/CurveSequence.h"
 #include "HyperAIStudioService.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SComboBox.h"
@@ -41,7 +42,7 @@ private:
 	FText GetModelButtonText() const;
 	TSharedRef<SWidget> BuildTerminalSessionWidget();
 	TSharedRef<SWidget> BuildSessionLog();
-	bool SubmitComposerText(const FString& Text);
+	void ToggleChatSidebar();
 
 	FReply OnRefreshClicked();
 	FReply OnPreparePromptClicked(FString AgentName);
@@ -78,7 +79,11 @@ private:
 	TSharedPtr<class SBox> TerminalHost;
 	TSharedPtr<class STerminal> TerminalWidget;
 	TSharedPtr<class SScrollBar> TerminalScrollBar;
-	TSharedPtr<class SHyperAIStudioPromptComposer> PromptComposer;
+	TSharedPtr<class SHyperAIStudioChatHistorySidebar> ChatSidebar;
+	FCurveSequence ChatSidebarCurve;
+	bool bChatSidebarOpen = false;
+	/** Chat running in the terminal, if it was resumed from history. */
+	FString ActiveChatSessionId;
 	TArray<FString> TranscriptLines;
 	FSimpleDelegate OnOpenWorkbench;
 	FText LastMessage;
