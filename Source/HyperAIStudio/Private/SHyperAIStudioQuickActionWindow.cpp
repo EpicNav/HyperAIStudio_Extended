@@ -11,7 +11,13 @@
 #include "ISettingsModule.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
+#include "ContentBrowserModule.h"
 #include "Dom/JsonObject.h"
+#include "DragAndDrop/ActorDragDropOp.h"
+#include "DragAndDrop/AssetDragDropOp.h"
+#include "Editor.h"
+#include "Engine/Selection.h"
+#include "IContentBrowserSingleton.h"
 #include "HAL/FileManager.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/FileHelper.h"
@@ -364,6 +370,8 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 		ActiveTerminalAgentName.Reset();
 	}
 	RegisterActiveTimer(0.15f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunDeferredRefresh));
+	// The MCP pill is only honest if it is re-probed; the probe is async and idles when nothing changed.
+	RegisterActiveTimer(15.0f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunStatusHeartbeat));
 	RegisterActiveTimer(0.35f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunDeferredTerminalStartup));
 	RegisterActiveTimer(0.25f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunQueuedVisibleTerminalCommandPoll));
 }
@@ -633,6 +641,13 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildHeader()
 			]
 		]
 		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(6.0f, 0.0f, 0.0f, 0.0f)
+		[
+			BuildMcpStatusSelector()
+		]
+		+ SHorizontalBox::Slot()
 		.FillWidth(1.0f)
 		[
 			SNew(SBox)
@@ -770,15 +785,7 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildAgentActions()
 		.AutoWidth()
 		.VAlign(VAlign_Center)
 		[
-			SNew(SBorder)
-			.BorderImage(FHyperAIStudioStyle::Get().GetBrush("HyperAIStudio.Badge"))
-			.Padding(FMargin(8.0f, 2.0f))
-			.ToolTipText(LOCTEXT("ChatContextManualTooltip", "Context is manual by default. Use context-menu actions when you want selected Unreal context attached."))
-			[
-				SNew(STextBlock)
-				.Text(LOCTEXT("ChatContextManual", "Context: Manual"))
-				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
-			]
+			BuildContextSelector()
 		]
 		+ SHorizontalBox::Slot()
 		.FillWidth(1.0f)
@@ -817,6 +824,270 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildAgentActions()
 			})
 			.OnClicked(this, &SHyperAIStudioQuickActionWindow::OnToggleTerminalAgentClicked)
 		];
+}
+
+TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildContextSelector()
+{
+	return SNew(SComboButton)
+		.ToolTipText(LOCTEXT("ContextTooltip", "Put what you have selected in Unreal into the agent's prompt. You can also drag assets or actors onto this panel."))
+		.IsEnabled_Lambda([this]() { return TerminalWidget.IsValid() && TerminalWidget->IsSessionRunning(); })
+		.OnGetMenuContent(this, &SHyperAIStudioQuickActionWindow::BuildContextMenu)
+		.ButtonContent()
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("ContextButton", "Context"))
+		];
+}
+
+TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildContextMenu()
+{
+	TArray<FAssetData> SelectedAssets;
+	FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser")).Get().GetSelectedAssets(SelectedAssets);
+	TArray<FString> ActorPaths;
+	if (GEditor)
+	{
+		for (FSelectionIterator It(*GEditor->GetSelectedActors()); It; ++It)
+		{
+			if (const AActor* Actor = Cast<AActor>(*It))
+			{
+				ActorPaths.Add(Actor->GetPathName());
+			}
+		}
+	}
+
+	FMenuBuilder Menu(true, nullptr);
+	Menu.BeginSection(NAME_None, LOCTEXT("ContextMenuHeading", "Insert into the prompt"));
+	Menu.AddMenuEntry(
+		FText::Format(LOCTEXT("InsertAssets", "Selected assets ({0})"), SelectedAssets.Num()),
+		LOCTEXT("InsertAssetsTooltip", "Paste the object path of each selected Content Browser asset."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Package"),
+		FUIAction(
+			FExecuteAction::CreateSPLambda(this, [this, SelectedAssets]()
+			{
+				TArray<FString> Paths;
+				for (const FAssetData& Asset : SelectedAssets)
+				{
+					Paths.Add(Asset.GetSoftObjectPath().ToString());
+				}
+				InsertIntoAgentPrompt(FString::Join(Paths, TEXT("\n")), TEXT("selected assets"));
+			}),
+			FCanExecuteAction::CreateLambda([SelectedAssets]() { return SelectedAssets.Num() > 0; })));
+	Menu.AddMenuEntry(
+		FText::Format(LOCTEXT("InsertActors", "Selected actors ({0})"), ActorPaths.Num()),
+		LOCTEXT("InsertActorsTooltip", "Paste the path of each selected level actor."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Level"),
+		FUIAction(
+			FExecuteAction::CreateSPLambda(this, [this, ActorPaths]()
+			{
+				InsertIntoAgentPrompt(FString::Join(ActorPaths, TEXT("\n")), TEXT("selected actors"));
+			}),
+			FCanExecuteAction::CreateLambda([ActorPaths]() { return ActorPaths.Num() > 0; })));
+	Menu.AddMenuEntry(
+		LOCTEXT("InsertSummary", "Context summary"),
+		LOCTEXT("InsertSummaryTooltip", "Paste a sentence describing the current selection and map."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Info"),
+		FUIAction(FExecuteAction::CreateSPLambda(this, [this]()
+		{
+			if (Service.IsValid())
+			{
+				InsertIntoAgentPrompt(Service->GetCurrentContextSummary(), TEXT("context summary"));
+			}
+		})));
+	Menu.EndSection();
+	Menu.AddMenuSeparator();
+	Menu.AddWidget(
+		SNew(SBox)
+		.WidthOverride(240.0f)
+		.Padding(FMargin(12.0f, 4.0f))
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("ContextDropHint", "Dragging assets or actors onto this panel does the same thing."))
+			.AutoWrapText(true)
+			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+		],
+		FText::GetEmpty());
+	return Menu.MakeWidget();
+}
+
+bool SHyperAIStudioQuickActionWindow::InsertIntoAgentPrompt(const FString& Text, const FString& Label)
+{
+	const FString Trimmed = Text.TrimStartAndEnd();
+	if (Trimmed.IsEmpty() || !TerminalWidget.IsValid() || !TerminalWidget->IsSessionRunning())
+	{
+		return false;
+	}
+	// Bracketed paste is on only while an agent TUI owns the prompt; at a shell prompt this would run as commands.
+	if (!HyperAIStudio::TerminalRawInput::IsAvailable()
+		|| !HyperAIStudio::TerminalRawInput::IsBracketedPasteEnabled(*TerminalWidget))
+	{
+		LastMessage = LOCTEXT("ContextNoAgentPrompt", "Nothing inserted: no agent prompt is accepting input. Start the agent first.");
+		AddTranscriptLine(LastMessage.ToString());
+		return false;
+	}
+	// Never sends: the text lands in the prompt for the user to finish writing around.
+	if (!HyperAIStudio::TerminalRawInput::WriteText(*TerminalWidget, Trimmed, /*bAppendCarriageReturn=*/false))
+	{
+		LastMessage = LOCTEXT("ContextInsertFailed", "Nothing inserted: the terminal refused the paste.");
+		AddTranscriptLine(LastMessage.ToString());
+		return false;
+	}
+	LastMessage = FText::Format(LOCTEXT("ContextInserted", "Inserted {0} into the prompt."), FText::FromString(Label));
+	AddTranscriptLine(LastMessage.ToString());
+	FSlateApplication::Get().SetKeyboardFocus(TerminalWidget, EFocusCause::SetDirectly);
+	return true;
+}
+
+void SHyperAIStudioQuickActionWindow::OnDragEnter(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent)
+{
+	SCompoundWidget::OnDragEnter(MyGeometry, DragDropEvent);
+}
+
+FReply SHyperAIStudioQuickActionWindow::OnDragOver(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent)
+{
+	const bool bUnderstood = DragDropEvent.GetOperationAs<FAssetDragDropOp>().IsValid()
+		|| DragDropEvent.GetOperationAs<FActorDragDropOp>().IsValid();
+	return bUnderstood ? FReply::Handled() : FReply::Unhandled();
+}
+
+FReply SHyperAIStudioQuickActionWindow::OnDrop(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent)
+{
+	TArray<FString> Paths;
+	FString Label;
+	if (const TSharedPtr<FAssetDragDropOp> AssetDrop = DragDropEvent.GetOperationAs<FAssetDragDropOp>())
+	{
+		for (const FAssetData& Asset : AssetDrop->GetAssets())
+		{
+			Paths.Add(Asset.GetSoftObjectPath().ToString());
+		}
+		Label = TEXT("dropped assets");
+	}
+	else if (const TSharedPtr<FActorDragDropOp> ActorDrop = DragDropEvent.GetOperationAs<FActorDragDropOp>())
+	{
+		for (const TWeakObjectPtr<AActor>& Actor : ActorDrop->Actors)
+		{
+			if (Actor.IsValid())
+			{
+				Paths.Add(Actor->GetPathName());
+			}
+		}
+		Label = TEXT("dropped actors");
+	}
+	if (Paths.IsEmpty())
+	{
+		return FReply::Unhandled();
+	}
+	InsertIntoAgentPrompt(FString::Join(Paths, TEXT("\n")), Label);
+	return FReply::Handled();
+}
+
+TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildMcpStatusSelector()
+{
+	return SNew(SComboButton)
+		.ComboButtonStyle(FAppStyle::Get(), "SimpleComboButton")
+		.HasDownArrow(false)
+		.ToolTipText_Lambda([this]()
+		{
+			return FText::Format(
+				LOCTEXT("McpStatusTooltip", "Unreal MCP at {0}\nServer running: {1}\nPort listening: {2}\nTool list reachable: {3}\nRegistered tools: {4}"),
+				FText::FromString(Status.Endpoint.IsEmpty() ? FString(TEXT("<not configured>")) : Status.Endpoint),
+				Status.bServerRunning ? LOCTEXT("Yes", "yes") : LOCTEXT("No", "no"),
+				Status.bPortListening ? LOCTEXT("Yes", "yes") : LOCTEXT("No", "no"),
+				Status.bToolsListReachable ? LOCTEXT("Yes", "yes") : LOCTEXT("No", "no"),
+				Status.RegisteredToolCount);
+		})
+		.OnGetMenuContent(this, &SHyperAIStudioQuickActionWindow::BuildMcpStatusMenu)
+		.ButtonContent()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			[
+				SNew(SImage)
+				.Image(FAppStyle::GetBrush(TEXT("Icons.BulletPoint")))
+				.ColorAndOpacity(this, &SHyperAIStudioQuickActionWindow::GetMcpStatusColor)
+			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(3.0f, 0.0f, 0.0f, 0.0f)
+			[
+				SNew(STextBlock)
+				.Text(this, &SHyperAIStudioQuickActionWindow::GetMcpStatusText)
+			]
+		];
+}
+
+TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildMcpStatusMenu()
+{
+	FMenuBuilder Menu(true, nullptr);
+	Menu.BeginSection(NAME_None, LOCTEXT("McpMenuHeading", "Unreal MCP"));
+	Menu.AddMenuEntry(
+		LOCTEXT("McpReconnect", "Reconnect"),
+		LOCTEXT("McpReconnectTooltip", "Restart the Unreal MCP server, then re-probe it. Running agents reconnect on their next call."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Refresh"),
+		FUIAction(FExecuteAction::CreateSPLambda(this, [this]()
+		{
+			if (!Service.IsValid())
+			{
+				return;
+			}
+			FText Message;
+			const bool bRestarted = Service->RestartUnrealMCP(Message);
+			LastMessage = Message.IsEmpty()
+				? (bRestarted ? LOCTEXT("McpRestarted", "Unreal MCP restarted.") : LOCTEXT("McpRestartFailed", "Unreal MCP did not restart."))
+				: Message;
+			AddTranscriptLine(LastMessage.ToString());
+			RefreshStatus();
+		})));
+	Menu.AddMenuEntry(
+		LOCTEXT("McpReprobe", "Re-probe"),
+		LOCTEXT("McpReprobeTooltip", "Check the endpoint again without restarting anything."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Search"),
+		FUIAction(FExecuteAction::CreateSPLambda(this, [this]() { RefreshStatus(); })));
+	Menu.AddMenuEntry(
+		LOCTEXT("McpCopyEndpoint", "Copy endpoint"),
+		LOCTEXT("McpCopyEndpointTooltip", "Copy the MCP endpoint URL to the clipboard."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Duplicate"),
+		FUIAction(
+			FExecuteAction::CreateSPLambda(this, [this]() { FPlatformApplicationMisc::ClipboardCopy(*Status.Endpoint); }),
+			FCanExecuteAction::CreateLambda([this]() { return !Status.Endpoint.IsEmpty(); })));
+	Menu.EndSection();
+	return Menu.MakeWidget();
+}
+
+FText SHyperAIStudioQuickActionWindow::GetMcpStatusText() const
+{
+	if (!Status.bUnrealMCPModuleAvailable)
+	{
+		return LOCTEXT("McpMissing", "MCP: unavailable");
+	}
+	if (!Status.bServerRunning)
+	{
+		return LOCTEXT("McpStopped", "MCP: stopped");
+	}
+	if (!Status.bPortListening)
+	{
+		return FText::Format(LOCTEXT("McpNotListening", "MCP: port {0} closed"), FText::AsNumber(Status.ActivePort, &FNumberFormattingOptions::DefaultNoGrouping()));
+	}
+	if (!Status.bToolsListReachable)
+	{
+		return LOCTEXT("McpUnreachable", "MCP: no tool list");
+	}
+	return FText::Format(LOCTEXT("McpReady", "MCP: {0} tools"), Status.RegisteredToolCount);
+}
+
+FSlateColor SHyperAIStudioQuickActionWindow::GetMcpStatusColor() const
+{
+	if (!Status.bServerRunning || !Status.bUnrealMCPModuleAvailable)
+	{
+		return FSlateColor(FStyleColors::AccentRed);
+	}
+	if (!Status.bPortListening || !Status.bToolsListReachable)
+	{
+		return FSlateColor(FStyleColors::AccentYellow);
+	}
+	return FSlateColor(FStyleColors::AccentGreen);
 }
 
 TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildModelSelector()
@@ -1145,7 +1416,7 @@ void SHyperAIStudioQuickActionWindow::ResetTranscript()
 	}
 
 	AddTranscriptLine(GetSelectedAgentStatusLine());
-	AddTranscriptLine(TEXT("Context: Manual unless opened from a Content Browser, level selection, or Blueprint context action."));
+	AddTranscriptLine(TEXT("Context: manual. Use the Context button, or drag assets and actors onto this panel, to put paths in the prompt."));
 	AddTranscriptLine(FString::Printf(TEXT("Last action: %s"), *LastMessage.ToString()));
 }
 
@@ -1170,6 +1441,16 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunDeferredRefresh(doubl
 {
 	RefreshStatus();
 	return EActiveTimerReturnType::Stop;
+}
+
+EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunStatusHeartbeat(double CurrentTime, float DeltaTime)
+{
+	// Only re-probe when the previous one finished, so a slow endpoint cannot queue probes on top of each other.
+	if (!bRefreshing && !Status.bProbeInProgress)
+	{
+		RefreshStatus();
+	}
+	return EActiveTimerReturnType::Continue;
 }
 
 EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunDeferredTerminalStartup(double CurrentTime, float DeltaTime)

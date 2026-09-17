@@ -28,6 +28,10 @@ public:
 	static FString BuildTerminalBootstrapCommandForStatus(const FHyperAIStudioStatus& InStatus, const FString& AgentName, const FString& ProjectRoot, const FString& LaunchCommand);
 
 	virtual FReply OnPreviewKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
+	/** Assets and actors dropped on the panel become object paths in the agent's prompt. */
+	virtual void OnDragEnter(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent) override;
+	virtual FReply OnDragOver(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent) override;
+	virtual FReply OnDrop(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent) override;
 
 private:
 	TSharedRef<SWidget> BuildHeader();
@@ -37,6 +41,14 @@ private:
 	TSharedRef<SWidget> BuildAgentSelector();
 	TSharedRef<SWidget> BuildModelSelector();
 	TSharedRef<SWidget> BuildModelMenu();
+	TSharedRef<SWidget> BuildContextSelector();
+	TSharedRef<SWidget> BuildContextMenu();
+	TSharedRef<SWidget> BuildMcpStatusSelector();
+	TSharedRef<SWidget> BuildMcpStatusMenu();
+	/** Paste text into the running agent's prompt without sending it. */
+	bool InsertIntoAgentPrompt(const FString& Text, const FString& Label);
+	FText GetMcpStatusText() const;
+	FSlateColor GetMcpStatusColor() const;
 	void SelectModel(FString ModelId);
 	bool IsModelSelected(FString ModelId) const;
 	FText GetModelButtonText() const;
@@ -54,6 +66,7 @@ private:
 	void ResetTranscript();
 	void AddTranscriptLine(const FString& Line);
 	EActiveTimerReturnType RunDeferredRefresh(double CurrentTime, float DeltaTime);
+	EActiveTimerReturnType RunStatusHeartbeat(double CurrentTime, float DeltaTime);
 	EActiveTimerReturnType RunDeferredTerminalStartup(double CurrentTime, float DeltaTime);
 	EActiveTimerReturnType RunDeferredVisibleTerminalCommand(double CurrentTime, float DeltaTime);
 	EActiveTimerReturnType RunQueuedVisibleTerminalCommandPoll(double CurrentTime, float DeltaTime);
