@@ -5,6 +5,7 @@
 #include "Containers/Ticker.h"
 #include "HyperAIStudioAgentActivity.h"
 #include "HyperAIStudioAgentState.h"
+#include "HyperAIStudioExtensionRuntime.h"
 #include "HyperAIStudioAgentChatHistory.h"
 #include "HyperAIStudioApprovalGate.h"
 #include "HyperAIStudioAsyncJobHost.h"
@@ -264,6 +265,49 @@ bool FHyperAIStudioAgentStateTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Ordinary output does not match a pattern"), Evaluate(Inputs).State, EHyperAIStudioAgentState::Working);
 	TestFalse(TEXT("Working needs no attention"), FEval::WantsAttention(EHyperAIStudioAgentState::Working));
 	TestFalse(TEXT("Idle needs no attention"), FEval::WantsAttention(EHyperAIStudioAgentState::Idle));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHyperAIStudioCohortMismatchTest,
+	"HyperAIStudio.Chat.CohortMismatchDiagnostic",
+	HyperAIStudio::ServiceTests::Flags)
+
+bool FHyperAIStudioCohortMismatchTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	using FRuntime = FHyperAIStudioExtensionRuntime;
+	// Niagara is in the generated catalog, so its real cohort must report no mismatch at all.
+	const TArray<FString> NiagaraTools = {
+		TEXT("hyper_niagara_inspect"), TEXT("hyper_niagara_apply_plan"), TEXT("hyper_niagara_validate")};
+	const FString Cohort = TEXT("cohort.source.hyperaistudioniagaratoolset.v1");
+	TestEqual(TEXT("A catalog-matching cohort reports nothing"),
+		FRuntime::DescribeExactGeneratedCohortMismatch(TEXT("niagara_vfx"), Cohort, NiagaraTools), FString());
+
+	const FString UnknownPack = FRuntime::DescribeExactGeneratedCohortMismatch(
+		TEXT("texture_graph_not_yet_generated"), Cohort, NiagaraTools);
+	TestTrue(TEXT("An absent pack is named"), UnknownPack.Contains(TEXT("texture_graph_not_yet_generated")));
+	TestTrue(TEXT("An absent pack says to regenerate"), UnknownPack.Contains(TEXT("Regenerate")));
+
+	TestTrue(TEXT("An unknown cohort is named"),
+		FRuntime::DescribeExactGeneratedCohortMismatch(TEXT("niagara_vfx"), TEXT("cohort.does.not.exist.v1"), NiagaraTools)
+			.Contains(TEXT("cohort.does.not.exist.v1")));
+
+	// The case that used to vanish silently: one extra tool name in the module.
+	TArray<FString> WithExtra = NiagaraTools;
+	WithExtra.Add(TEXT("hyper_niagara_topology"));
+	const FString ExtraReason = FRuntime::DescribeExactGeneratedCohortMismatch(TEXT("niagara_vfx"), Cohort, WithExtra);
+	TestTrue(TEXT("The tool the catalog lacks is named"), ExtraReason.Contains(TEXT("hyper_niagara_topology")));
+	TestTrue(TEXT("It says the catalog lacks it"), ExtraReason.Contains(TEXT("the catalog lacks")));
+
+	TArray<FString> Missing = NiagaraTools;
+	Missing.RemoveAt(0);
+	const FString MissingReason = FRuntime::DescribeExactGeneratedCohortMismatch(TEXT("niagara_vfx"), Cohort, Missing);
+	TestTrue(TEXT("The tool the module lacks is named"), MissingReason.Contains(TEXT("hyper_niagara_inspect")));
+	TestTrue(TEXT("It says the module lacks it"), MissingReason.Contains(TEXT("the module lacks")));
+
+	TestFalse(TEXT("An empty declaration is refused with a reason"),
+		FRuntime::DescribeExactGeneratedCohortMismatch(FString(), Cohort, NiagaraTools).IsEmpty());
 	return true;
 }
 

@@ -32,6 +32,7 @@
 #include "HyperAIStudioContextSearchToolsets.h"
 #include "HyperAIStudioDiagnosticsRegistration.h"
 #include "HyperAIStudioExtensionRuntime.h"
+#include "HyperAIStudioAgentActivity.h"
 #include "HyperAIStudioApprovalGate.h"
 #include "HyperAIStudioAsyncJobHost.h"
 #include "HyperAIStudioFoundationProbe.h"
@@ -1081,6 +1082,25 @@ private:
 		};
 		const bool bAllowSourceCandidate =
 			FHyperAIStudioExtensionRuntime::AreSourceCandidateToolsEnabled();
+		int32 LoadedCount = 0;
+		TArray<FString> SkippedSummaries;
+		// A module whose tool list disagrees with the generated catalog used to disappear with a Verbose line.
+		// Every skip now says which module, why, and what to do about it.
+		auto ReportSkip = [&SkippedSummaries](const FOptionalCapabilityModule& Module, const FString& Reason, const FString& Remedy)
+		{
+			SkippedSummaries.Add(Module.ModuleName.ToString());
+			UE_LOG(LogHyperAIStudio, Warning,
+				TEXT("Optional capability module %s was not loaded: %s %s Its tools (%s) are unavailable to agents."),
+				*Module.ModuleName.ToString(), *Reason, *Remedy, *FString::Join(Module.ToolNames, TEXT(", ")));
+			FHyperAIStudioActivityEntry Entry;
+			Entry.Kind = EHyperAIStudioActivityKind::Failed;
+			Entry.PackId = Module.PackId;
+			Entry.ToolName = Module.ModuleName.ToString();
+			Entry.StatusCode = TEXT("module_not_loaded");
+			Entry.Detail = Reason + TEXT(" ") + Remedy;
+			FHyperAIStudioAgentActivityLog::Record(MoveTemp(Entry));
+		};
+
 		for (const FOptionalCapabilityModule& Module : Modules)
 		{
 			FHyperAIStudioExtensionCohortAdmission Admission;
@@ -1088,6 +1108,11 @@ private:
 					Module.PackId, Module.CohortId, Module.ToolNames, Admission)
 				|| !Admission.bExactCohortMatch)
 			{
+				const FString Reason = FHyperAIStudioExtensionRuntime::DescribeExactGeneratedCohortMismatch(
+					Module.PackId, Module.CohortId, Module.ToolNames);
+				ReportSkip(Module,
+					Reason.IsEmpty() ? TEXT("the generated catalog refused its exact cohort.") : Reason,
+					TEXT("Regenerate HyperAIStudioCapabilityPackCatalog.generated.inl so the catalog and the module agree."));
 				continue;
 			}
 			const bool bMayLoad = Admission.State == EHyperAIStudioExtensionAdmissionState::Admitted
@@ -1095,32 +1120,43 @@ private:
 					&& bAllowSourceCandidate);
 			if (!bMayLoad)
 			{
+				// A deliberate setting, not a defect: say so plainly and name the setting that changes it.
+				UE_LOG(LogHyperAIStudio, Display,
+					TEXT("Optional capability module %s is a source candidate and stays unloaded while Native Tool Channel is not Preview."),
+					*Module.ModuleName.ToString());
+				SkippedSummaries.Add(Module.ModuleName.ToString());
 				continue;
 			}
-			bool bPrerequisitesReady = true;
+			TArray<FString> MissingPlugins;
 			for (const FString& PluginName : Module.RequiredPlugins)
 			{
 				const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(PluginName);
 				if (!Plugin.IsValid() || !Plugin->IsEnabled())
 				{
-					bPrerequisitesReady = false;
-					break;
+					MissingPlugins.Add(PluginName);
 				}
 			}
-			if (!bPrerequisitesReady)
+			if (!MissingPlugins.IsEmpty())
 			{
 				UE_LOG(LogHyperAIStudio, Display,
-					TEXT("Optional capability module %s remains unavailable until its project plugin prerequisites are enabled."),
-					*Module.ModuleName.ToString());
+					TEXT("Optional capability module %s remains unavailable until these project plugins are enabled: %s."),
+					*Module.ModuleName.ToString(), *FString::Join(MissingPlugins, TEXT(", ")));
+				SkippedSummaries.Add(Module.ModuleName.ToString());
 				continue;
 			}
 			if (!FModuleManager::Get().LoadModule(Module.ModuleName))
 			{
-				UE_LOG(LogHyperAIStudio, Error,
-					TEXT("Admission-authorized optional capability module %s failed to load."),
-					*Module.ModuleName.ToString());
+				ReportSkip(Module, TEXT("the module is admitted but failed to load."),
+					TEXT("Check the log above for its own startup error, and that the plugin was built."));
+				continue;
 			}
+			++LoadedCount;
 		}
+
+		UE_LOG(LogHyperAIStudio, Display,
+			TEXT("Optional capability modules: %d loaded, %d skipped%s"),
+			LoadedCount, SkippedSummaries.Num(),
+			SkippedSummaries.IsEmpty() ? TEXT(".") : *FString::Printf(TEXT(" (%s)."), *FString::Join(SkippedSummaries, TEXT(", "))));
 	}
 
 	void BeginEnginePreExit()
