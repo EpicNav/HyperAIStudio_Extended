@@ -16,6 +16,8 @@ public:
 	SLATE_BEGIN_ARGS(SHyperAIStudioChatHistorySidebar) {}
 		SLATE_EVENT(FHyperAIStudioOnResumeChat, OnResumeChat)
 		SLATE_EVENT(FSimpleDelegate, OnClose)
+		/** Start a fresh conversation with the selected agent. */
+		SLATE_EVENT(FSimpleDelegate, OnNewChat)
 		/** Session id of the chat running in the terminal, highlighted in the list. */
 		SLATE_ATTRIBUTE(FString, ActiveSessionId)
 	SLATE_END_ARGS()
@@ -38,6 +40,9 @@ private:
 
 	FHyperAIStudioOnResumeChat OnResumeChat;
 	FSimpleDelegate OnClose;
+	FSimpleDelegate OnNewChat;
+	/** Session whose title is being edited inline, if any. */
+	FString RenamingSessionId;
 	TAttribute<FString> ActiveSessionId;
 
 	TSharedPtr<SListView<FRowPtr>> List;

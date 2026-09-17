@@ -7,6 +7,8 @@
 #include "Async/TaskGraphInterfaces.h"
 #include "Containers/Ticker.h"
 #include "HyperAIStudioExtensionRuntime.h"
+#include "HyperAIStudioSettings.h"
+#include "Misc/ScopeExit.h"
 #include "HyperAIStudioTextureGraphGate.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/PackageName.h"
@@ -323,6 +325,12 @@ bool FHyperAIStudioTextureGraphEndToEndTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+
+	// Unattended: the approval gate is off for this test and restored on the way out.
+	UHyperAIStudioSettings* Settings = GetMutableDefault<UHyperAIStudioSettings>();
+	const bool bPreviousApproval = Settings->bRequireApprovalForAgentEdits;
+	Settings->bRequireApprovalForAgentEdits = false;
+	ON_SCOPE_EXIT { Settings->bRequireApprovalForAgentEdits = bPreviousApproval; };
 
 	FHyperAIStudioTextureGraphEditOpsPayload Payload;
 	Payload.TargetPath = TargetPath;

@@ -15,6 +15,8 @@
 #include "HAL/FileManager.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/FileHelper.h"
+#include "HyperAIStudioApprovalGate.h"
+#include "SHyperAIStudioActivitySidebar.h"
 #include "SHyperAIStudioChatHistorySidebar.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -223,6 +225,7 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 		.AlwaysShowScrollbar(false)
 		.Thickness(FVector2D(5.0f, 5.0f));
 	ChatSidebarCurve = FCurveSequence(0.0f, 0.2f, ECurveEaseFunction::CubicOut);
+	ActivitySidebarCurve = FCurveSequence(0.0f, 0.2f, ECurveEaseFunction::CubicOut);
 
 	ChildSlot
 	[
@@ -258,6 +261,15 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 							SAssignNew(ChatSidebar, SHyperAIStudioChatHistorySidebar)
 							.OnResumeChat(this, &SHyperAIStudioQuickActionWindow::ResumeChat)
 							.OnClose(this, &SHyperAIStudioQuickActionWindow::ToggleChatSidebar)
+							.OnNewChat_Lambda([this]()
+							{
+								ResumeAgentName.Reset();
+								ResumeSessionId.Reset();
+								ActiveChatSessionId.Reset();
+								LastMessage = LOCTEXT("NewChatStarted", "Starting a new chat.");
+								AddTranscriptLine(LastMessage.ToString());
+								QueueTerminalStartup(true, true);
+							})
 							.ActiveSessionId_Lambda([this]() { return ActiveChatSessionId; })
 						]
 					]
@@ -316,6 +328,28 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 						.Text_Lambda([this]() { return LastMessage; })
 						.AutoWrapText(true)
 						.ColorAndOpacity(HyperAIStudio::QuickAction::MutedColor())
+					]
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					SNew(SBox)
+					.WidthOverride_Lambda([this]() { return HyperAIStudio::QuickAction::ChatSidebarWidth * ActivitySidebarCurve.GetLerp(); })
+					.Visibility_Lambda([this]() { return ActivitySidebarCurve.GetLerp() > 0.0f ? EVisibility::Visible : EVisibility::Collapsed; })
+					.Clipping(EWidgetClipping::ClipToBounds)
+					[
+						SNew(SBorder)
+						.BorderImage(FAppStyle::GetBrush(TEXT("NoBorder")))
+						.Padding(FMargin(10.0f, 0.0f, 0.0f, 0.0f))
+						.ColorAndOpacity_Lambda([this]() { return FLinearColor(1.0f, 1.0f, 1.0f, ActivitySidebarCurve.GetLerp()); })
+						[
+							SAssignNew(ActivitySidebar, SHyperAIStudioChatActivitySidebar)
+							.OnClose(this, &SHyperAIStudioQuickActionWindow::ToggleActivitySidebar)
+							.OnApprovalResolved_Lambda([this]()
+							{
+								Invalidate(EInvalidateWidgetReason::Paint);
+							})
+						]
 					]
 				]
 			]
@@ -497,6 +531,23 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildSessionLog()
 		];
 }
 
+void SHyperAIStudioQuickActionWindow::ToggleActivitySidebar()
+{
+	bActivitySidebarOpen = !bActivitySidebarOpen;
+	if (ActivitySidebarCurve.IsPlaying())
+	{
+		ActivitySidebarCurve.Reverse();
+	}
+	else if (bActivitySidebarOpen)
+	{
+		ActivitySidebarCurve.Play(AsShared());
+	}
+	else
+	{
+		ActivitySidebarCurve.PlayReverse(AsShared());
+	}
+}
+
 void SHyperAIStudioQuickActionWindow::ToggleChatSidebar()
 {
 	bChatSidebarOpen = !bChatSidebarOpen;
@@ -585,6 +636,50 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildHeader()
 		.FillWidth(1.0f)
 		[
 			SNew(SBox)
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(0.0f, 0.0f, 6.0f, 0.0f)
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ToolTipText(LOCTEXT("ActivityToggleTooltip", "Plans waiting for your approval, work in progress, and what the agent changed."))
+			.OnClicked_Lambda([this]()
+			{
+				ToggleActivitySidebar();
+				return FReply::Handled();
+			})
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				[
+					SNew(SImage)
+					.Image(FAppStyle::GetBrush(TEXT("Icons.Visibility")))
+					.ColorAndOpacity_Lambda([]()
+					{
+						// Amber while something is waiting on the user.
+						return SHyperAIStudioChatActivitySidebar::GetPendingApprovalCount() > 0
+							? FSlateColor(FStyleColors::AccentYellow) : FSlateColor::UseForeground();
+					})
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(4.0f, 0.0f, 0.0f, 0.0f)
+				[
+					SNew(STextBlock)
+					.Text_Lambda([]()
+					{
+						const int32 Pending = SHyperAIStudioChatActivitySidebar::GetPendingApprovalCount();
+						return Pending > 0
+							? FText::Format(LOCTEXT("ActivityTogglePending", "Activity ({0})"), Pending)
+							: LOCTEXT("ActivityToggle", "Activity");
+					})
+				]
+			]
 		]
 		+ SHorizontalBox::Slot()
 		.AutoWidth()

@@ -43,6 +43,7 @@ private:
 	TSharedRef<SWidget> BuildTerminalSessionWidget();
 	TSharedRef<SWidget> BuildSessionLog();
 	void ToggleChatSidebar();
+	void ToggleActivitySidebar();
 
 	FReply OnRefreshClicked();
 	FReply OnPreparePromptClicked(FString AgentName);
@@ -80,6 +81,9 @@ private:
 	TSharedPtr<class STerminal> TerminalWidget;
 	TSharedPtr<class SScrollBar> TerminalScrollBar;
 	TSharedPtr<class SHyperAIStudioChatHistorySidebar> ChatSidebar;
+	TSharedPtr<class SHyperAIStudioChatActivitySidebar> ActivitySidebar;
+	FCurveSequence ActivitySidebarCurve;
+	bool bActivitySidebarOpen = false;
 	FCurveSequence ChatSidebarCurve;
 	bool bChatSidebarOpen = false;
 	/** Chat running in the terminal, if it was resumed from history. */

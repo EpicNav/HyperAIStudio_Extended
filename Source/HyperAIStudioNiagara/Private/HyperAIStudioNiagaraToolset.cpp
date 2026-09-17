@@ -10,6 +10,8 @@
 #include "Engine/Engine.h"
 #include "FileHelpers.h"
 #include "HyperAIStudioNiagaraExternalEditGate.h"
+#include "HyperAIStudioApprovalGate.h"
+#include "HyperAIStudioAsyncJobHost.h"
 #include "HyperAIStudioCapabilityRuntimeIndex.h"
 #include "HyperAIStudioExtensionRuntime.h"
 #include "IO/IoHash.h"
@@ -503,10 +505,37 @@ namespace HyperAIStudio::Niagara::Private
 				FString::Join(PerOpStatus, TEXT(", ")), TEXT("applied"));
 		}
 		case EHyperAIStudioDomainExecutionActionKind::Compile:
-			// Never wait: compilation can take seconds against a 250 ms phase budget. It finishes on later ticks.
+		{
+			// Never wait here: compilation takes seconds against a 250 ms phase budget. A job watches it instead,
+			// so the Activity panel and hyper_operation_status show when it actually finished.
 			System->RequestCompile(/*bForce=*/false);
+			FHyperAIStudioAsyncJobRequest Job;
+			Job.PackId = FHyperAIStudioNiagaraContracts::PackId;
+			Job.ToolName = TEXT("hyper_niagara_apply_plan");
+			Job.Target = Payload.TargetPath;
+			Job.DeadlineMs = 5 * 60 * 1000;
+			Job.PollIntervalMs = 250;
+			FString JobId;
+			FString JobError;
+			FHyperAIStudioAsyncJobHost::Start(Job, [TargetPath = Payload.TargetPath](FString& OutProgress, FString& OutDiagnostic)
+			{
+				UNiagaraSystem* Compiling = Cast<UNiagaraSystem>(FSoftObjectPath(TargetPath).ResolveObject());
+				if (!Compiling)
+				{
+					OutDiagnostic = TEXT("The System unloaded while compiling.");
+					return EHyperAIStudioAsyncJobPoll::Failed;
+				}
+				if (Compiling->HasActiveCompilations())
+				{
+					OutProgress = TEXT("compiling");
+					return EHyperAIStudioAsyncJobPoll::Running;
+				}
+				OutDiagnostic = TEXT("Compile finished; run hyper_niagara_validate for stack issues.");
+				return EHyperAIStudioAsyncJobPoll::Completed;
+			}, JobId, JobError);
 			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("compile_requested"),
-				TEXT("Compile requested; it finishes asynchronously."), TEXT("compile_requested"));
+				JobError.IsEmpty() ? TEXT("Compile requested; a job watches it to completion.") : JobError, TEXT("compile_requested"));
+		}
 		case EHyperAIStudioDomainExecutionActionKind::Validate:
 		{
 			// Every Niagara edit queues a compile, and Epic refuses to read stack issues until it finishes, which can
@@ -1800,6 +1829,33 @@ FHyperAINiagaraApplyPlanReport FHyperAIStudioNiagaraContracts::BuildPlan(
 	{
 		return Reject(TEXT("plan_hash_mismatch"),
 			TEXT("The plan changed since its dry run (ops, target state, or catalog). Dry-run again and review it."));
+	}
+
+	if (FHyperAIStudioApprovalGate::IsApprovalRequired(EHyperAIStudioDomainSafety::Edit))
+	{
+		FHyperAIStudioApprovalSummary Summary;
+		Summary.PackId = PackId;
+		Summary.ToolName = TEXT("hyper_niagara_apply_plan");
+		Summary.VariantId = MutationVariantId;
+		Summary.Safety = EHyperAIStudioDomainSafety::Edit;
+		Summary.EffectTarget = Request.TargetPath;
+		Summary.PlanHash = Payload->SemanticFingerprint;
+		for (const FHyperAINiagaraEditOp& Op : Request.Ops)
+		{
+			Summary.Effects.Add(FString::Printf(TEXT("%s %s"), *Op.Kind,
+				*FString::Join(TArray<FString>({Op.EmitterName, Op.ScriptName, Op.ModuleName, Op.Name}).FilterByPredicate(
+					[](const FString& Part) { return !Part.IsEmpty(); }), TEXT(" / "))));
+		}
+		Summary.Touches.Add(Request.TargetPath);
+		FString ApprovalError;
+		if (!FHyperAIStudioApprovalGate::Request(Prepared, Request.OperationId, Summary, ApprovalError))
+		{
+			return Reject(TEXT("approval_not_queued"), ApprovalError);
+		}
+		Report.bOk = true;
+		Report.Status = TEXT("awaiting_user_approval");
+		Report.Diagnostic = TEXT("Waiting for approval in HyperAI Chat, Activity panel. Nothing changed yet. Poll hyper_operation_status with operation_id: it starts once approved.");
+		return Report;
 	}
 
 	FHyperAIStudioTypedArtifactStageReceipt Receipt;

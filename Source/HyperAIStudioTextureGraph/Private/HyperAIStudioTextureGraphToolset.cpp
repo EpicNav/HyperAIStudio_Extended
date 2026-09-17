@@ -4,6 +4,8 @@
 
 #include "Engine/Engine.h"
 #include "FileHelpers.h"
+#include "HyperAIStudioApprovalGate.h"
+#include "HyperAIStudioAsyncJobHost.h"
 #include "HyperAIStudioCapabilityRuntimeIndex.h"
 #include "HyperAIStudioExtensionRuntime.h"
 #include "HyperAIStudioTextureGraphGate.h"
@@ -155,8 +157,27 @@ namespace HyperAIStudio::TextureGraph::Private
 			{
 				return Finish(EHyperAIStudioDomainDispatchOutcome::FailedAfterKnownEffect, TEXT("export_not_started"), Error);
 			}
+			// A job watches the export to completion, so the Activity panel shows it running and finishing.
+			FHyperAIStudioAsyncJobRequest Job;
+			Job.PackId = FHyperAIStudioTextureGraphContracts::PackId;
+			Job.ToolName = FHyperAIStudioTextureGraphContracts::MutationToolName;
+			Job.Target = Payload.TargetPath;
+			Job.DeadlineMs = 10 * 60 * 1000;
+			Job.PollIntervalMs = 500;
+			FString JobId;
+			FString JobError;
+			FHyperAIStudioAsyncJobHost::Start(Job, [](FString& OutProgress, FString& OutDiagnostic)
+			{
+				if (Gate::CountExportsInFlight() > 0)
+				{
+					OutProgress = TEXT("rendering and writing textures");
+					return EHyperAIStudioAsyncJobPoll::Running;
+				}
+				OutDiagnostic = TEXT("Export finished; validate with policy exported to confirm the textures.");
+				return EHyperAIStudioAsyncJobPoll::Completed;
+			}, JobId, JobError);
 			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("export_started"),
-				TEXT("Export started; it finishes asynchronously."), TEXT("export_started"));
+				JobError.IsEmpty() ? TEXT("Export started; a job watches it to completion.") : JobError, TEXT("export_started"));
 		}
 		case EHyperAIStudioDomainExecutionActionKind::Validate:
 		{
@@ -832,6 +853,42 @@ FHyperAITextureGraphApplyPlanReport FHyperAIStudioTextureGraphContracts::BuildPl
 	{
 		return Reject(TEXT("plan_hash_mismatch"), TEXT("The plan changed since its dry run (ops, graph state, or catalog). Dry-run again and review it."));
 	}
+	if (FHyperAIStudioApprovalGate::IsApprovalRequired(EHyperAIStudioDomainSafety::Edit))
+	{
+		FHyperAIStudioApprovalSummary Summary;
+		Summary.PackId = PackId;
+		Summary.ToolName = MutationToolName;
+		Summary.VariantId = MutationVariantId;
+		Summary.Safety = EHyperAIStudioDomainSafety::Edit;
+		Summary.EffectTarget = Request.TargetPath;
+		Summary.PlanHash = Payload->SemanticFingerprint;
+		if (Request.bCreate)
+		{
+			Summary.Effects.Add(TEXT("create the Texture Graph asset"));
+		}
+		for (const FHyperAITextureGraphEditOp& Op : Request.Ops)
+		{
+			Summary.Effects.Add(FString::Printf(TEXT("%s %s"), *Op.Kind,
+				*FString::Join(TArray<FString>({Op.ExpressionClass, Op.Node, Op.Pin, Op.ToNode, Op.ToPin, Op.BaseName}).FilterByPredicate(
+					[](const FString& Part) { return !Part.IsEmpty(); }), TEXT(" / "))));
+		}
+		if (Request.bExport)
+		{
+			Summary.Effects.Add(TEXT("export the output textures"));
+		}
+		Summary.Touches.Add(Request.TargetPath);
+		Summary.Touches.Append(Report.Effects.ExportTexturePaths);
+		FString ApprovalError;
+		if (!FHyperAIStudioApprovalGate::Request(Prepared, Request.OperationId, Summary, ApprovalError))
+		{
+			return Reject(TEXT("approval_not_queued"), ApprovalError);
+		}
+		Report.bOk = true;
+		Report.Status = TEXT("awaiting_user_approval");
+		Report.Diagnostic = TEXT("Waiting for approval in HyperAI Chat, Activity panel. Nothing changed yet. Poll hyper_operation_status with operation_id: it starts once approved.");
+		return Report;
+	}
+
 	FHyperAIStudioTypedArtifactStageReceipt Receipt;
 	FHyperAIStudioTrustedExecutionDiagnostic StageStatus;
 	FString StageError;

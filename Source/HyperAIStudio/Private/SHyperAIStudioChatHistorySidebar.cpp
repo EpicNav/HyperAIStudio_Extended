@@ -3,12 +3,14 @@
 #include "SHyperAIStudioChatHistorySidebar.h"
 
 #include "Async/Async.h"
+#include "HyperAIStudioChatHistoryPrefs.h"
 #include "HyperAIStudioService.h"
 #include "HyperAIStudioStyle.h"
 #include "Styling/AppStyle.h"
 #include "Styling/StyleColors.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSearchBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/SBoxPanel.h"
@@ -81,6 +83,7 @@ void SHyperAIStudioChatHistorySidebar::Construct(const FArguments& InArgs)
 	using namespace HyperAIStudio::ChatHistorySidebar;
 	OnResumeChat = InArgs._OnResumeChat;
 	OnClose = InArgs._OnClose;
+	OnNewChat = InArgs._OnNewChat;
 	ActiveSessionId = InArgs._ActiveSessionId;
 
 	ChildSlot
@@ -101,6 +104,11 @@ void SHyperAIStudioChatHistorySidebar::Construct(const FArguments& InArgs)
 					SNew(STextBlock)
 					.Text(LOCTEXT("Title", "Chats"))
 					.TextStyle(FHyperAIStudioStyle::Get(), "HyperAIStudio.Text.Title")
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					IconButton("Icons.Plus", LOCTEXT("NewChatTooltip", "Start a new chat with the selected agent"), OnNewChat)
 				]
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
@@ -194,13 +202,22 @@ void SHyperAIStudioChatHistorySidebar::RebuildFiltered()
 	// Sessions arrive newest first, so each date group is contiguous: emit a heading whenever the group changes.
 	Filtered.Reset();
 	FString CurrentGroup;
-	for (const FHyperAIStudioChatSession& Session : Sessions)
+	TArray<FHyperAIStudioChatSession> Ordered = Sessions;
+	Ordered.StableSort([](const FHyperAIStudioChatSession& A, const FHyperAIStudioChatSession& B)
 	{
-		if (!Filter.IsEmpty() && !Session.Title.Contains(Filter) && !Session.AgentName.Contains(Filter))
+		return UHyperAIStudioChatHistoryPrefs::IsPinned(A.SessionId) && !UHyperAIStudioChatHistoryPrefs::IsPinned(B.SessionId);
+	});
+	for (const FHyperAIStudioChatSession& Session : Ordered)
+	{
+		const FString Renamed = UHyperAIStudioChatHistoryPrefs::GetTitle(Session.SessionId);
+		const FString Shown = Renamed.IsEmpty() ? Session.Title : Renamed;
+		if (!Filter.IsEmpty() && !Shown.Contains(Filter) && !Session.AgentName.Contains(Filter))
 		{
 			continue;
 		}
-		const FText Group = HyperAIStudio::ChatHistorySidebar::DateGroup(Session.LastActiveUtc);
+		const FText Group = UHyperAIStudioChatHistoryPrefs::IsPinned(Session.SessionId)
+			? LOCTEXT("GroupPinned", "Pinned")
+			: HyperAIStudio::ChatHistorySidebar::DateGroup(Session.LastActiveUtc);
 		if (Filtered.IsEmpty() || Group.ToString() != CurrentGroup)
 		{
 			CurrentGroup = Group.ToString();
@@ -216,6 +233,7 @@ void SHyperAIStudioChatHistorySidebar::RebuildFiltered()
 
 TSharedRef<ITableRow> SHyperAIStudioChatHistorySidebar::GenerateRow(FRowPtr Row, const TSharedRef<STableViewBase>& OwnerTable)
 {
+	using namespace HyperAIStudio::ChatHistorySidebar;
 	if (!Row->Session.IsValid())
 	{
 		return SNew(STableRow<FRowPtr>, OwnerTable)
@@ -231,29 +249,109 @@ TSharedRef<ITableRow> SHyperAIStudioChatHistorySidebar::GenerateRow(FRowPtr Row,
 	}
 	const TSharedPtr<FHyperAIStudioChatSession> Session = Row->Session;
 	const FString SessionId = Session->SessionId;
+	const bool bPinned = UHyperAIStudioChatHistoryPrefs::IsPinned(SessionId);
+	const FString Renamed = UHyperAIStudioChatHistoryPrefs::GetTitle(SessionId);
+	const FString Shown = Renamed.IsEmpty() ? Session->Title : Renamed;
 	auto IsActive = [this, SessionId]() { return !SessionId.IsEmpty() && ActiveSessionId.Get(FString()) == SessionId; };
+
+	TSharedRef<SHorizontalBox> TitleLine = SNew(SHorizontalBox);
+	if (RenamingSessionId == SessionId)
+	{
+		TitleLine->AddSlot()
+		.FillWidth(1.0f)
+		[
+			SNew(SEditableTextBox)
+			.Text(FText::FromString(Shown))
+			.SelectAllTextWhenFocused(true)
+			.OnTextCommitted_Lambda([this, SessionId](const FText& NewTitle, ETextCommit::Type CommitType)
+			{
+				if (CommitType == ETextCommit::OnEnter)
+				{
+					UHyperAIStudioChatHistoryPrefs::SetTitle(SessionId, NewTitle.ToString());
+				}
+				RenamingSessionId.Reset();
+				RebuildFiltered();
+			})
+		];
+	}
+	else
+	{
+		TitleLine->AddSlot()
+		.FillWidth(1.0f)
+		.VAlign(VAlign_Center)
+		[
+			SNew(STextBlock)
+			.Text(FText::FromString(Shown))
+			.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+			.ColorAndOpacity_Lambda([IsActive]() { return IsActive() ? FSlateColor(FStyleColors::AccentBlue) : FSlateColor::UseForeground(); })
+		];
+		TitleLine->AddSlot()
+		.AutoWidth()
+		[
+			IconButton(bPinned ? "Icons.Pinned" : "Icons.Unpinned",
+				bPinned ? LOCTEXT("UnpinTooltip", "Unpin this chat") : LOCTEXT("PinTooltip", "Pin this chat to the top"),
+				FSimpleDelegate::CreateLambda([this, SessionId]()
+				{
+					UHyperAIStudioChatHistoryPrefs::TogglePinned(SessionId);
+					RebuildFiltered();
+				}))
+		];
+		TitleLine->AddSlot()
+		.AutoWidth()
+		[
+			IconButton("Icons.Edit", LOCTEXT("RenameTooltip", "Rename this chat here. The agent's own log is not touched."),
+				FSimpleDelegate::CreateLambda([this, SessionId]()
+				{
+					RenamingSessionId = SessionId;
+					RebuildFiltered();
+				}))
+		];
+	}
+
+	TSharedRef<SHorizontalBox> MetaLine = SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		[
+			SNew(STextBlock)
+			.Text(FText::Format(LOCTEXT("RowMeta", "{0} - {1}"),
+				FText::FromString(Session->AgentName), HyperAIStudio::ChatHistorySidebar::RelativeTime(Session->LastActiveUtc)))
+			.Font(FAppStyle::GetFontStyle("SmallFont"))
+			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+		];
+	if (Session->bUsedUnrealMcp)
+	{
+		MetaLine->AddSlot()
+		.AutoWidth()
+		.Padding(6.0f, 0.0f, 0.0f, 0.0f)
+		[
+			SNew(SBorder)
+			.BorderImage(FHyperAIStudioStyle::Get().GetBrush("HyperAIStudio.Badge"))
+			.Padding(FMargin(4.0f, 0.0f))
+			.ToolTipText(LOCTEXT("UnrealBadgeTooltip", "This chat called Unreal MCP tools."))
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("UnrealBadge", "Unreal"))
+				.Font(FAppStyle::GetFontStyle("SmallFont"))
+				.ColorAndOpacity(FSlateColor(FStyleColors::AccentGreen))
+			]
+		];
+	}
+
 	return SNew(STableRow<FRowPtr>, OwnerTable)
 		.Padding(FMargin(6.0f, 5.0f))
-		.ToolTipText(FText::Format(LOCTEXT("RowTooltip", "{0}\nResume in {1}"), FText::FromString(Session->Title), FText::FromString(Session->AgentName)))
+		.ToolTipText(FText::Format(LOCTEXT("RowTooltip", "{0}\nResume in {1}"), FText::FromString(Shown), FText::FromString(Session->AgentName)))
 		[
 			SNew(SVerticalBox)
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			[
-				SNew(STextBlock)
-				.Text(FText::FromString(Session->Title))
-				.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
-				.ColorAndOpacity_Lambda([IsActive]() { return IsActive() ? FStyleColors::AccentBlue : FSlateColor::UseForeground(); })
+				TitleLine
 			]
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(0.0f, 2.0f, 0.0f, 0.0f)
 			[
-				SNew(STextBlock)
-				.Text(FText::Format(LOCTEXT("RowMeta", "{0} - {1}"),
-					FText::FromString(Session->AgentName), HyperAIStudio::ChatHistorySidebar::RelativeTime(Session->LastActiveUtc)))
-				.Font(FAppStyle::GetFontStyle("SmallFont"))
-				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				MetaLine
 			]
 		];
 }

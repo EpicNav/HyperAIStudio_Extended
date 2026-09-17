@@ -152,13 +152,15 @@ namespace
 		for (const FString& Path : FilesNewestFirst(MoveTemp(Paths)))
 		{
 			const FString SessionId = FPaths::GetBaseFilename(Path);
-			const FString Title = IsSafeSessionId(SessionId) ? ExtractClaudeTitle(ReadHeadAndTail(Path)) : FString();
+			const FString Text = IsSafeSessionId(SessionId) ? ReadHeadAndTail(Path) : FString();
+			const FString Title = ExtractClaudeTitle(Text);
 			// No title means no typed prompt: an aborted launch, not a conversation worth resuming.
 			if (Title.IsEmpty())
 			{
 				continue;
 			}
-			Out.Add({TEXT("Claude Code"), SessionId, Title, IFileManager::Get().GetTimeStamp(*Path)});
+			Out.Add({TEXT("Claude Code"), SessionId, Title, IFileManager::Get().GetTimeStamp(*Path),
+				MentionsUnrealMcpCall(Text)});
 			if (++Found >= MaxSessions)
 			{
 				return;
@@ -210,7 +212,7 @@ namespace
 			{
 				continue;
 			}
-			Out.Add({TEXT("Codex"), Id, Title, IFileManager::Get().GetTimeStamp(*Path)});
+			Out.Add({TEXT("Codex"), Id, Title, IFileManager::Get().GetTimeStamp(*Path), MentionsUnrealMcpCall(Head)});
 			if (++Found >= MaxSessions)
 			{
 				return;
@@ -256,6 +258,13 @@ bool IsSafeSessionId(const FString& SessionId)
 	// The id lands in a cmd.exe command line: hex digits and dashes only.
 	return SessionId.Len() >= 8 && SessionId.Len() <= 64
 		&& Algo::AllOf(SessionId, [](const TCHAR C) { return FChar::IsHexDigit(C) || C == TEXT('-'); });
+}
+
+bool MentionsUnrealMcpCall(const FString& JsonlText)
+{
+	// A called tool is a JSON name field. The catalogue an agent is shown lists the same names as escaped
+	// text inside a prompt string, which this deliberately does not match.
+	return JsonlText.Contains(TEXT("\"name\":\"mcp__unreal")) || JsonlText.Contains(TEXT("\"name\":\"mcp__hyper"));
 }
 
 FString ClaudeProjectDirectoryName(const FString& ProjectRoot)

@@ -32,6 +32,8 @@
 #include "HyperAIStudioContextSearchToolsets.h"
 #include "HyperAIStudioDiagnosticsRegistration.h"
 #include "HyperAIStudioExtensionRuntime.h"
+#include "HyperAIStudioApprovalGate.h"
+#include "HyperAIStudioAsyncJobHost.h"
 #include "HyperAIStudioFoundationProbe.h"
 #include "HyperAIStudioNativeReadToolset.h"
 #include "HyperAIStudioPIEPlaytestToolset.h"
@@ -830,6 +832,9 @@ public:
 
 		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(HyperAIStudioTabName);
 		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(HyperAIStudioChatTabName);
+		// Jobs hold pack callbacks and pending approvals hold prepared plans; neither may outlive the host.
+		FHyperAIStudioAsyncJobHost::Shutdown();
+		FHyperAIStudioApprovalGate::Clear();
 		if (FoundationProbe)
 		{
 			FoundationProbe->Shutdown();

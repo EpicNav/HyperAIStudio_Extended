@@ -222,6 +222,14 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow")
 	bool bAllowClipboardPromptCopy = true;
 
+	/**
+	 * Hold every agent asset edit in the chat panel's Activity view until you approve it. Turn this off and
+	 * edits run as soon as the agent submits them. Destructive and external-effect tools always need approval,
+	 * because their server grant is issued only by that click.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow")
+	bool bRequireApprovalForAgentEdits = true;
+
 	/** Models offered per chat agent. Agents without an entry get one the first time HyperAI Chat opens. */
 	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Models")
 	TArray<FHyperAIStudioAgentModelRoute> AgentModelRoutes;

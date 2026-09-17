@@ -10,6 +10,8 @@
 #include "Containers/Ticker.h"
 #include "FileHelpers.h"
 #include "HyperAIStudioExtensionRuntime.h"
+#include "HyperAIStudioSettings.h"
+#include "Misc/ScopeExit.h"
 #include "HyperAIStudioNiagaraExternalEditGate.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/PackageName.h"
@@ -476,6 +478,12 @@ bool FHyperAIStudioNiagaraEndToEndTest::RunTest(const FString& Parameters)
 		AddError(TEXT("The fixture has no ParticleUpdateScript module suitable for toggling, or did not inspect cleanly."));
 		return false;
 	}
+
+	// This test approves nothing by hand, so it runs with the approval gate off and puts it back after.
+	UHyperAIStudioSettings* Settings = GetMutableDefault<UHyperAIStudioSettings>();
+	const bool bPreviousApproval = Settings->bRequireApprovalForAgentEdits;
+	Settings->bRequireApprovalForAgentEdits = false;
+	ON_SCOPE_EXIT { Settings->bRequireApprovalForAgentEdits = bPreviousApproval; };
 
 	FHyperAINiagaraApplyPlanRequest Plan;
 	Plan.TargetPath = TargetPath;

@@ -12,6 +12,8 @@ struct FHyperAIStudioChatSession
 	FString SessionId;
 	FString Title;
 	FDateTime LastActiveUtc;
+	/** An Unreal MCP tool call was found in the part of the log that was read. */
+	bool bUsedUnrealMcp = false;
 };
 
 /**
@@ -29,6 +31,8 @@ namespace HyperAIStudio::ChatHistory
 	FString BuildResumeArguments(const FString& AgentName, const FString& SessionId);
 
 	bool IsSafeSessionId(const FString& SessionId);
+	/** True when the text records a call to an Unreal or Hyper MCP tool, not merely a tool listing. */
+	bool MentionsUnrealMcpCall(const FString& JsonlText);
 	FString ClaudeProjectDirectoryName(const FString& ProjectRoot);
 	/** Title from Claude Code jsonl text: last custom title, else last AI title, else the first typed prompt. */
 	FString ExtractClaudeTitle(const FString& JsonlText);
