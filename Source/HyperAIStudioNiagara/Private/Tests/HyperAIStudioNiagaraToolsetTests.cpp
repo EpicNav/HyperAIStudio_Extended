@@ -4,15 +4,20 @@
 
 #include "HyperAIStudioNiagaraToolset.h"
 
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "AssetToolsModule.h"
+#include "Containers/Ticker.h"
+#include "FileHelpers.h"
 #include "HyperAIStudioExtensionRuntime.h"
+#include "HyperAIStudioSettings.h"
+#include "Misc/ScopeExit.h"
+#include "HyperAIStudioNiagaraExternalEditGate.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/PackageName.h"
 #include "NiagaraEditorModule.h"
-#include "NiagaraEditorUtilities.h"
-#include "NiagaraExternalSystemEditorUtilities.h"
 #include "NiagaraSystem.h"
-#include "NiagaraValidationRuleSet.h"
-#include "NiagaraValidationRules.h"
+#include "UObject/SoftObjectPath.h"
 
 #include <type_traits>
 
@@ -26,7 +31,7 @@ namespace HyperAIStudio::Niagara::Tests
 		return TEXT("sha256:") + FString::ChrN(64, Character);
 	}
 
-	FHyperAIStudioDomainDispatchContext MakeMutationContext()
+	FHyperAIStudioDomainDispatchContext MakeMutationContext(const EHyperAIStudioDomainExecutionActionKind Phase)
 	{
 		const FHyperAIStudioDomainAdapterDescriptor& Descriptor =
 			FHyperAIStudioNiagaraContracts::GetAdapterDescriptor();
@@ -37,8 +42,15 @@ namespace HyperAIStudio::Niagara::Tests
 		Context.Binding.ExpectedAdapterFingerprint = Descriptor.AdapterFingerprint;
 		Context.Binding.ExpectedSafety = EHyperAIStudioDomainSafety::Edit;
 		Context.Safety = EHyperAIStudioDomainSafety::Edit;
-		Context.ActionKind = EHyperAIStudioDomainExecutionActionKind::Apply;
+		Context.ActionKind = Phase;
 		return Context;
+	}
+
+	FHyperAINiagaraEditOp MakeOp(const FString& Kind)
+	{
+		FHyperAINiagaraEditOp Op;
+		Op.Kind = Kind;
+		return Op;
 	}
 }
 
@@ -52,6 +64,7 @@ bool FHyperAIStudioNiagaraManifestTest::RunTest(const FString& Parameters)
 	(void)Parameters;
 	const TArray<FHyperAIStudioNiagaraManifestEntry>& Manifest =
 		FHyperAIStudioNiagaraContracts::GetManifest();
+	// The generated catalog pins these three names; a fourth tool would fail admission until it is regenerated.
 	TestEqual(TEXT("exactly three Niagara callables"), Manifest.Num(), 3);
 	TestEqual(TEXT("exact optional-module toolset identity"),
 		FHyperAIStudioNiagaraContracts::GetQualifiedToolsetName(),
@@ -73,6 +86,9 @@ bool FHyperAIStudioNiagaraManifestTest::RunTest(const FString& Parameters)
 		{
 			TestTrue(TEXT("manifest function is AICallable"),
 				Function->HasMetaData(TEXT("AICallable")));
+			// The registry turns this tooltip into the MCP tool description agents choose by.
+			TestFalse(TEXT("manifest function has a description"),
+				Function->GetMetaData(TEXT("ToolTip")).IsEmpty());
 		}
 	}
 	bool bNamesExact = Actual.Num() == Expected.Num();
@@ -99,12 +115,6 @@ bool FHyperAIStudioNiagaraDescriptorTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("source cohort"),
 		FString(FHyperAIStudioNiagaraContracts::AtomicCohortId),
 		FString(TEXT("cohort.source.hyperaistudioniagaratoolset.v1")));
-	TestEqual(TEXT("blocking plugin requirement group"),
-		FString(FHyperAIStudioNiagaraContracts::PluginRequirementGroupId),
-		FString(TEXT("niagara_plugin")));
-	TestEqual(TEXT("blocking backend requirement group"),
-		FString(FHyperAIStudioNiagaraContracts::BackendRequirementGroupId),
-		FString(TEXT("niagara_backend")));
 	TestEqual(TEXT("exact live probe"),
 		FString(FHyperAIStudioNiagaraContracts::LiveProbeId),
 		FString(TEXT("probe.niagara_editor")));
@@ -115,41 +125,36 @@ bool FHyperAIStudioNiagaraDescriptorTest::RunTest(const FString& Parameters)
 		FHyperAIStudioNiagaraContracts::IsCanonicalSha256(Descriptor.AdapterFingerprint));
 	TestTrue(TEXT("all Niagara requirement groups are blocking"),
 		Descriptor.ApplicableNonBlockingRequirementGroupIds.IsEmpty());
-	TestFalse(TEXT("unlisted exact cohort is not production-admitted"),
-		FHyperAIStudioNiagaraContracts::IsRegistrationAllowed(false));
-	TSet<FString> Tools;
 	TSet<FString> Variants;
 	TSet<FString> RequestTypes;
+	TSet<FString> ResultTypes;
 	for (const FHyperAIStudioDomainVariantDescriptor& Variant : Descriptor.Variants)
 	{
-		Tools.Add(Variant.ToolName);
 		Variants.Add(Variant.VariantId);
 		RequestTypes.Add(Variant.RequestTypeId);
+		ResultTypes.Add(Variant.ResultTypeId);
 		TestTrue(TEXT("request schema canonical"),
-			FHyperAIStudioNiagaraContracts::IsCanonicalSha256(
-				Variant.RequestSchemaFingerprint));
+			FHyperAIStudioNiagaraContracts::IsCanonicalSha256(Variant.RequestSchemaFingerprint));
 		TestTrue(TEXT("result schema canonical"),
-			FHyperAIStudioNiagaraContracts::IsCanonicalSha256(
-				Variant.ResultSchemaFingerprint));
+			FHyperAIStudioNiagaraContracts::IsCanonicalSha256(Variant.ResultSchemaFingerprint));
+		TestTrue(TEXT("result type stays in the disjoint result namespace"),
+			Variant.ResultTypeId.StartsWith(TEXT("hyperai.result.")));
 	}
-	TestEqual(TEXT("unique tools"), Tools.Num(), 3);
 	TestEqual(TEXT("unique variants"), Variants.Num(), 3);
 	TestEqual(TEXT("unique request DTOs"), RequestTypes.Num(), 3);
-	TestEqual(TEXT("inspect read safety"), Descriptor.Variants[0].Safety,
-		EHyperAIStudioDomainSafety::Read);
-	TestEqual(TEXT("rename edit safety"), Descriptor.Variants[1].Safety,
-		EHyperAIStudioDomainSafety::Edit);
-	TestEqual(TEXT("rename variant makes no full-reference claim"),
-		Descriptor.Variants[1].VariantId,
-		FString(TEXT("user_parameter_rename_preflight.v1")));
-	TestEqual(TEXT("validate read safety"), Descriptor.Variants[2].Safety,
-		EHyperAIStudioDomainSafety::Read);
+	TestEqual(TEXT("unique result DTOs"), ResultTypes.Num(), 3);
+	// Safety classes are pinned by the generated catalog; changing one fails admission closed.
+	TestEqual(TEXT("inspect read safety"), Descriptor.Variants[0].Safety, EHyperAIStudioDomainSafety::Read);
+	TestEqual(TEXT("apply_plan edit safety"), Descriptor.Variants[1].Safety, EHyperAIStudioDomainSafety::Edit);
+	TestEqual(TEXT("apply_plan runs batched edit ops"), Descriptor.Variants[1].VariantId,
+		FString(TEXT("external_edit_ops.v1")));
+	TestEqual(TEXT("validate read safety"), Descriptor.Variants[2].Safety, EHyperAIStudioDomainSafety::Read);
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FHyperAIStudioNiagaraDelegationTest,
-	"HyperAIStudio.Niagara.Contracts.AllEpicCallablesDelegated",
+	"HyperAIStudio.Niagara.Contracts.CapabilityMatrix",
 	HyperAIStudio::Niagara::Tests::Flags)
 
 bool FHyperAIStudioNiagaraDelegationTest::RunTest(const FString& Parameters)
@@ -159,96 +164,102 @@ bool FHyperAIStudioNiagaraDelegationTest::RunTest(const FString& Parameters)
 		FHyperAIStudioNiagaraContracts::GetCapabilityMatrix();
 	TestEqual(TEXT("one explicit Niagara matrix row"), Matrix.Num(), 1);
 	if (Matrix.IsEmpty()) return false;
-	const TArray<FString>& Delegated = Matrix[0].DelegatedEpicCallables;
-	TestEqual(TEXT("all 56 Epic Niagara callables delegated"), Delegated.Num(), 56);
-	TSet<FString> Unique;
-	for (const FString& Name : Delegated) Unique.Add(Name);
-	TestEqual(TEXT("no duplicate delegation entries"), Unique.Num(), 56);
-	TestTrue(TEXT("Epic compile-state read delegated"),
-		Unique.Contains(TEXT("GetSystemCompileState")));
-	TestTrue(TEXT("Epic mutation primitive delegated"),
-		Unique.Contains(TEXT("AddUserVariables")));
-	TestTrue(TEXT("Epic fix execution delegated"),
-		Unique.Contains(TEXT("ApplyStackIssueFix")));
-	TestFalse(TEXT("full-reference rename is absent from Epic 56"),
-		Unique.Contains(TEXT("RenameUserParameterForSystem")));
-	TestTrue(TEXT("native virtual rule blocker is machine-readable"),
-		Matrix[0].UnsupportedCases.Contains(TEXT("native_rule_execution_not_hard_bounded")));
-	TestTrue(TEXT("full-reference inventory blocker is machine-readable"),
+	TSet<FString> Delegated;
+	for (const FString& Name : Matrix[0].DelegatedEpicCallables) Delegated.Add(Name);
+	TestEqual(TEXT("all 56 Epic Niagara callables still listed"), Matrix[0].DelegatedEpicCallables.Num(), 56);
+	TestEqual(TEXT("no duplicate delegation entries"), Delegated.Num(), 56);
+	// Agents read these flags from every Niagara report to decide whether apply_plan can mutate.
+	TestTrue(TEXT("independent validation is implemented"), Matrix[0].bIndependentValidationImplemented);
+	TestTrue(TEXT("mutation execution is implemented"), Matrix[0].bMutationExecutionImplemented);
+	TestTrue(TEXT("batched edits are a supported case"),
+		Matrix[0].SupportedCases.Contains(TEXT("batched_edit_ops_one_undo_step")));
+	TestTrue(TEXT("open-editor hazard is machine-readable"),
+		Matrix[0].UnsupportedCases.Contains(TEXT("target_open_in_niagara_editor")));
+	TestFalse(TEXT("retired rename blocker is gone"),
 		Matrix[0].UnsupportedCases.Contains(TEXT("full_reference_inventory_incomplete")));
-	TestFalse(TEXT("old reference-safe claim is removed"),
-		Matrix[0].SupportedCases.Contains(
-			TEXT("single_reference_safe_user_parameter_rename_dry_run")));
-	TestFalse(TEXT("independent validation is not admitted as implemented"),
-		Matrix[0].bIndependentValidationImplemented);
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FHyperAIStudioNiagaraNoLoadValidationAuthorityTest,
-	"HyperAIStudio.Niagara.Validation.LoadedOnlyNativeAuthority",
+	FHyperAIStudioNiagaraEditOpValidationTest,
+	"HyperAIStudio.Niagara.Mutation.EditOpValidation",
 	HyperAIStudio::Niagara::Tests::Flags)
 
-bool FHyperAIStudioNiagaraNoLoadValidationAuthorityTest::RunTest(const FString& Parameters)
+bool FHyperAIStudioNiagaraEditOpValidationTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	if (!FHyperAIStudioExtensionRuntime::IsPendingNativeToolsDevModeEnabled())
+	using namespace HyperAIStudio::Niagara::Tests;
+	namespace Gate = HyperAIStudio::Niagara::ExternalEditGate;
+	FString Status;
+	FString Diagnostic;
+	auto Accepts = [&](const FHyperAINiagaraEditOp& Op) { return Gate::ValidateOp(Op, false, Status, Diagnostic); };
+
+	FHyperAINiagaraEditOp Enable = MakeOp(TEXT("set_module_enabled"));
+	Enable.EmitterName = TEXT("Sparks");
+	Enable.ScriptName = TEXT("ParticleUpdateScript");
+	Enable.ModuleName = TEXT("GravityForce");
+	TestTrue(TEXT("emitter module toggle accepted"), Accepts(Enable));
+
+	FHyperAINiagaraEditOp SystemScoped = Enable;
+	SystemScoped.ScriptName = TEXT("SystemUpdateScript");
+	TestFalse(TEXT("system script with an emitter name rejected"), Accepts(SystemScoped));
+	SystemScoped.EmitterName.Reset();
+	TestTrue(TEXT("system script without an emitter accepted"), Accepts(SystemScoped));
+
+	FHyperAINiagaraEditOp NoEmitter = Enable;
+	NoEmitter.EmitterName.Reset();
+	TestFalse(TEXT("emitter script without an emitter rejected"), Accepts(NoEmitter));
+	TestEqual(TEXT("address failure status"), Status, FString(TEXT("invalid_op_address")));
+
+	FHyperAINiagaraEditOp BadScript = Enable;
+	BadScript.ScriptName = TEXT("ParticleSimulationStage");
+	TestFalse(TEXT("unknown script stack rejected"), Accepts(BadScript));
+
+	FHyperAINiagaraEditOp ControlChars = Enable;
+	ControlChars.ModuleName = TEXT("Gravity\nForce");
+	TestFalse(TEXT("control characters rejected"), Accepts(ControlChars));
+	TestEqual(TEXT("text failure status"), Status, FString(TEXT("invalid_op_text")));
+
+	TestFalse(TEXT("unknown kind rejected"), Accepts(MakeOp(TEXT("remove_module"))));
+	TestEqual(TEXT("removals stay unsupported"), Status, FString(TEXT("unsupported_op_kind")));
+
+	FHyperAINiagaraEditOp SetValue = Enable;
+	SetValue.Kind = TEXT("set_input_value");
+	SetValue.InputNameStack = { TEXT("Gravity") };
+	auto ValueAccepted = [&](const TCHAR* Type, const TCHAR* Value)
 	{
-		FHyperAINiagaraValidateRequest Request;
-		Request.TargetPath = TEXT("/Game/VFX/NS_Unloaded.NS_Unloaded");
-		const FHyperAINiagaraValidateReport Disabled =
-			FHyperAIStudioNiagaraContracts::Validate(Request);
-		TestEqual(TEXT("environment-unset gate"), Disabled.Status,
-			FString(TEXT("source_candidate_dev_mode_required")));
-		TestEqual(TEXT("environment-unset executes no native rule"),
-			Disabled.ExecutedRuleCount, 0);
-	}
-	const TSoftObjectPtr<UNiagaraValidationRuleSet> UnloadedRuleSet{
-		FSoftObjectPath(TEXT("/Game/__HyperAIStudioNiagara_UnloadedRuleSet.__HyperAIStudioNiagara_UnloadedRuleSet"))};
-	TestNull(TEXT("unloaded soft rule set fails closed without loading"),
-		FHyperAIStudioNiagaraContracts::ResolveAlreadyLoadedRuleSet(UnloadedRuleSet));
-	const TArray<const UClass*> NativeClasses = {
-		UNiagaraValidationRule_NoWarmupTime::StaticClass(),
-		UNiagaraValidationRule_NoEvents::StaticClass(),
-		UNiagaraValidationRule_FixedGPUBoundsSet::StaticClass(),
-		UNiagaraValidationRule_EmitterCount::StaticClass(),
-		UNiagaraValidationRule_RendererCount::StaticClass(),
-		UNiagaraValidationRule_BannedRenderers::StaticClass(),
-		UNiagaraValidationRule_Lightweight::StaticClass(),
-		UNiagaraValidationRule_BannedModules::StaticClass(),
-		UNiagaraValidationRule_BannedDataInterfaces::StaticClass(),
-		UNiagaraValidationRule_RendererSortingEnabled::StaticClass(),
-		UNiagaraValidationRule_GpuUsage::StaticClass(),
-		UNiagaraValidationRule_RibbonRenderer::StaticClass(),
-		UNiagaraValidationRule_InvalidEffectType::StaticClass(),
-		UNiagaraValidationRule_HasEffectType::StaticClass(),
-		UNiagaraValidationRule_LWC::StaticClass(),
-		UNiagaraValidationRule_NoOpaqueRenderMaterial::StaticClass(),
-		UNiagaraValidationRule_NoFixedDeltaTime::StaticClass(),
-		UNiagaraValidationRule_SimulationStageBudget::StaticClass(),
-		UNiagaraValidationRule_TickDependencyCheck::StaticClass(),
-		UNiagaraValidationRule_UserDataInterfaces::StaticClass(),
-		UNiagaraValidationRule_SingletonModule::StaticClass(),
-		UNiagaraValidationRule_NoMapForOnCpu::StaticClass(),
-		UNiagaraValidationRule_ModuleSimTargetRestriction::StaticClass(),
-		UNiagaraValidationRule_MaterialUsage::StaticClass(),
-		UNiagaraValidationRule_RequireLatestParentEmitterVersion::StaticClass(),
-		UNiagaraValidationRule_RequireParentEmitter::StaticClass()};
-	TestEqual(TEXT("sealed UE 5.8 class count"), NativeClasses.Num(), 26);
-	TSet<const UClass*> Unique;
-	for (const UClass* NativeClass : NativeClasses)
-	{
-		Unique.Add(NativeClass);
-		TestTrue(TEXT("native class is admitted exactly"),
-			FHyperAIStudioNiagaraContracts::IsSealedNativeValidationRuleClass(NativeClass));
-	}
-	TestEqual(TEXT("native class list has no duplicates"), Unique.Num(), 26);
-	TestFalse(TEXT("abstract base is not executable authority"),
-		FHyperAIStudioNiagaraContracts::IsSealedNativeValidationRuleClass(
-			UNiagaraValidationRule::StaticClass()));
-	TestFalse(TEXT("non-rule class is rejected"),
-		FHyperAIStudioNiagaraContracts::IsSealedNativeValidationRuleClass(
-			UNiagaraValidationRuleSet::StaticClass()));
+		SetValue.ValueType = Type;
+		SetValue.Value = Value;
+		return Accepts(SetValue);
+	};
+	TestTrue(TEXT("float"), ValueAccepted(TEXT("float"), TEXT("-9.8")));
+	TestTrue(TEXT("int32"), ValueAccepted(TEXT("int32"), TEXT("3")));
+	TestTrue(TEXT("bool"), ValueAccepted(TEXT("bool"), TEXT("true")));
+	TestTrue(TEXT("vector"), ValueAccepted(TEXT("vector"), TEXT("0, 0, -980")));
+	TestTrue(TEXT("color"), ValueAccepted(TEXT("color"), TEXT("1,0.5,0,1")));
+	TestFalse(TEXT("int32 rejects a fraction"), ValueAccepted(TEXT("int32"), TEXT("3.5")));
+	TestFalse(TEXT("vector rejects the wrong arity"), ValueAccepted(TEXT("vector"), TEXT("1,2")));
+	TestFalse(TEXT("float rejects exponent and words"), ValueAccepted(TEXT("float"), TEXT("nan")));
+	TestFalse(TEXT("bool rejects anything but true or false"), ValueAccepted(TEXT("bool"), TEXT("1")));
+	TestFalse(TEXT("unknown value type rejected"), ValueAccepted(TEXT("quat"), TEXT("0,0,0,1")));
+	SetValue.ValueType = TEXT("float");
+	SetValue.Value = TEXT("1");
+	SetValue.InputNameStack.Reset();
+	TestFalse(TEXT("set_input_value needs an input name"), Accepts(SetValue));
+
+	FHyperAINiagaraEditOp Renderer = MakeOp(TEXT("add_renderer"));
+	Renderer.EmitterName = TEXT("Sparks");
+	Renderer.AssetPath = TEXT("/Script/Niagara.NiagaraSpriteRendererProperties");
+	TestTrue(TEXT("renderer add accepted by shape"), Accepts(Renderer));
+	TestTrue(TEXT("sprite renderer class resolves"), Gate::ValidateOp(Renderer, true, Status, Diagnostic));
+	Renderer.AssetPath = TEXT("/Script/Niagara.NiagaraRendererProperties");
+	TestFalse(TEXT("abstract renderer base rejected"), Gate::ValidateOp(Renderer, true, Status, Diagnostic));
+
+	FHyperAINiagaraEditOp Fix = MakeOp(TEXT("apply_stack_issue_fix"));
+	TestFalse(TEXT("fix without ids rejected"), Accepts(Fix));
+	Fix.IssueId = TEXT("issue");
+	Fix.FixId = TEXT("fix");
+	TestTrue(TEXT("fix with ids accepted"), Accepts(Fix));
 	return true;
 }
 
@@ -270,143 +281,262 @@ bool FHyperAIStudioNiagaraCasBoundsTest::RunTest(const FString& Parameters)
 		FHyperAIStudioNiagaraContracts::ClassifyAssetRegistryExistence(
 			UE::AssetRegistry::EExists::Unknown), FString(TEXT("unknown")));
 	TestTrue(TEXT("canonical top-level object path"),
-		FHyperAIStudioNiagaraContracts::IsCanonicalProjectObjectPath(
-			TEXT("/Game/VFX/NS_Test.NS_Test")));
+		FHyperAIStudioNiagaraContracts::IsCanonicalProjectObjectPath(TEXT("/Game/VFX/NS_Test.NS_Test")));
 	TestFalse(TEXT("folder path rejected"),
 		FHyperAIStudioNiagaraContracts::IsCanonicalProjectObjectPath(TEXT("/Game/VFX")));
 	TestFalse(TEXT("subobject path rejected"),
-		FHyperAIStudioNiagaraContracts::IsCanonicalProjectObjectPath(
-			TEXT("/Game/VFX/NS_Test.NS_Test:Emitter")));
+		FHyperAIStudioNiagaraContracts::IsCanonicalProjectObjectPath(TEXT("/Game/VFX/NS_Test.NS_Test:Emitter")));
 	TestFalse(TEXT("wildcard rejected"),
-		FHyperAIStudioNiagaraContracts::IsCanonicalProjectObjectPath(
-			TEXT("/Game/VFX/*.NS_Test")));
+		FHyperAIStudioNiagaraContracts::IsCanonicalProjectObjectPath(TEXT("/Game/VFX/*.NS_Test")));
 	TestTrue(TEXT("lowercase sha accepted"),
-		FHyperAIStudioNiagaraContracts::IsCanonicalSha256(
-			HyperAIStudio::Niagara::Tests::HashOf(TEXT('a'))));
+		FHyperAIStudioNiagaraContracts::IsCanonicalSha256(HyperAIStudio::Niagara::Tests::HashOf(TEXT('a'))));
 	TestFalse(TEXT("uppercase sha rejected"),
-		FHyperAIStudioNiagaraContracts::IsCanonicalSha256(
-			HyperAIStudio::Niagara::Tests::HashOf(TEXT('A'))));
+		FHyperAIStudioNiagaraContracts::IsCanonicalSha256(HyperAIStudio::Niagara::Tests::HashOf(TEXT('A'))));
 	TestTrue(TEXT("User namespace accepted"),
 		FHyperAIStudioNiagaraContracts::IsUserParameterName(TEXT("User.SpawnRate")));
 	TestFalse(TEXT("non-user namespace rejected"),
 		FHyperAIStudioNiagaraContracts::IsUserParameterName(TEXT("System.SpawnRate")));
-	TestFalse(TEXT("empty segment rejected"),
-		FHyperAIStudioNiagaraContracts::IsUserParameterName(TEXT("User..SpawnRate")));
-	FHyperAINiagaraUserParameterIdentity Source;
-	Source.VariableGuid = TEXT("12345678-1234-1234-1234-1234567890ab");
-	Source.Name = TEXT("User.Old");
-	Source.TypeFingerprint = HyperAIStudio::Niagara::Tests::HashOf(TEXT('2'));
-	FHyperAINiagaraUserParameterRename Rename;
-	Rename.ExpectedVariableGuid = Source.VariableGuid;
-	Rename.OldName = Source.Name;
-	Rename.NewName = TEXT("User.New");
-	Rename.ExpectedTypeFingerprint = Source.TypeFingerprint;
-	const FHyperAINiagaraUserParameterIdentity* Matched = nullptr;
-	FString RenameError;
-	TArray<FHyperAINiagaraUserParameterIdentity> Snapshot{Source};
-	TestTrue(TEXT("exact rename identity accepted"),
-		FHyperAIStudioNiagaraContracts::ValidateRenameIdentityAgainstSnapshot(
-			Snapshot, Rename, Matched, RenameError));
-	TestTrue(TEXT("source identity returned"), Matched == &Snapshot[0]);
-	FHyperAINiagaraUserParameterIdentity Duplicate = Source;
-	Duplicate.VariableGuid = TEXT("87654321-4321-4321-4321-ba0987654321");
-	Duplicate.Name = Rename.NewName;
-	Snapshot.Add(Duplicate);
-	TestFalse(TEXT("duplicate destination rejected"),
-		FHyperAIStudioNiagaraContracts::ValidateRenameIdentityAgainstSnapshot(
-			Snapshot, Rename, Matched, RenameError));
-	TestEqual(TEXT("duplicate destination status"), RenameError,
-		FString(TEXT("destination_parameter_exists")));
-	Snapshot.Pop();
-	Rename.ExpectedTypeFingerprint = HyperAIStudio::Niagara::Tests::HashOf(TEXT('3'));
-	TestFalse(TEXT("type mismatch rejected"),
-		FHyperAIStudioNiagaraContracts::ValidateRenameIdentityAgainstSnapshot(
-			Snapshot, Rename, Matched, RenameError));
-	TestEqual(TEXT("type mismatch status"), RenameError,
-		FString(TEXT("variable_identity_mismatch")));
-	Rename.ExpectedTypeFingerprint = Source.TypeFingerprint;
-	Rename.NewName = TEXT("System.Invalid");
-	TestFalse(TEXT("invalid destination namespace rejected"),
-		FHyperAIStudioNiagaraContracts::ValidateRenameIdentityAgainstSnapshot(
-			Snapshot, Rename, Matched, RenameError));
-	TestEqual(TEXT("invalid name status"), RenameError,
-		FString(TEXT("invalid_rename_identity")));
 	TestEqual(TEXT("page bound"), FHyperAIStudioNiagaraContracts::MaxPageSize, 64);
-	TestEqual(TEXT("parameter bound"), FHyperAIStudioNiagaraContracts::MaxParameters, 256);
-	TestEqual(TEXT("graph-node bound"), FHyperAIStudioNiagaraContracts::MaxGraphNodes, 4096);
-	TestEqual(TEXT("native-rule bound"), FHyperAIStudioNiagaraContracts::MaxValidationRules, 128);
-	TestFalse(TEXT("store plus graphs cannot prove UE 5.8 full rename closure"),
-		FHyperAIStudioNiagaraContracts::AreFullReferenceDomainsProven(
-			true, true, false, false, false, false, false));
-	TestFalse(TEXT("all domains still fail when reflection materializes before bounds"),
-		FHyperAIStudioNiagaraContracts::AreFullReferenceDomainsProven(
-			true, true, true, true, true, true, false));
-	TestTrue(TEXT("future proof requires every domain and pre-materialization bound"),
-		FHyperAIStudioNiagaraContracts::AreFullReferenceDomainsProven(
-			true, true, true, true, true, true, true));
+	TestEqual(TEXT("op bound"), FHyperAIStudioNiagaraContracts::MaxOpsPerPlan, 16);
+
+	FHyperAINiagaraApplyPlanRequest Request;
+	Request.TargetPath = TEXT("/Game/VFX/NS_Test.NS_Test");
+	Request.ExpectedRevision = HyperAIStudio::Niagara::Tests::HashOf(TEXT('1'));
+	TestEqual(TEXT("an empty plan is rejected before any capture"),
+		FHyperAIStudioNiagaraContracts::BuildPlan(Request).Status, FString(TEXT("invalid_op_count")));
+	Request.bDryRun = false;
+	TestEqual(TEXT("non-dry needs an operation id and plan hash"),
+		FHyperAIStudioNiagaraContracts::BuildPlan(Request).Status, FString(TEXT("invalid_submission_fields")));
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FHyperAIStudioNiagaraCloneAndAdapterTest,
-	"HyperAIStudio.Niagara.Mutation.DeepCloneAndNoEffectAdapter",
+	FHyperAIStudioNiagaraPayloadAndAdapterTest,
+	"HyperAIStudio.Niagara.Mutation.PayloadSealAndAdapterPhases",
 	HyperAIStudio::Niagara::Tests::Flags)
 
-bool FHyperAIStudioNiagaraCloneAndAdapterTest::RunTest(const FString& Parameters)
+bool FHyperAIStudioNiagaraPayloadAndAdapterTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	using namespace HyperAIStudio::Niagara::Tests;
-	const TSharedRef<FHyperAIStudioNiagaraRenamePayload, ESPMode::ThreadSafe> Payload =
-		MakeShared<FHyperAIStudioNiagaraRenamePayload, ESPMode::ThreadSafe>();
-	Payload->TargetPath = TEXT("/Game/VFX/NS_Test.NS_Test");
+	const TSharedRef<FHyperAIStudioNiagaraEditOpsPayload, ESPMode::ThreadSafe> Payload =
+		MakeShared<FHyperAIStudioNiagaraEditOpsPayload, ESPMode::ThreadSafe>();
+	Payload->TargetPath = TEXT("/Game/__HyperAIStudioMissing/NS_Missing.NS_Missing");
 	Payload->BaseRevision = HashOf(TEXT('1'));
-	Payload->ExpectedVariableGuid = TEXT("12345678-1234-1234-1234-1234567890ab");
-	Payload->OldName = TEXT("User.Old");
-	Payload->NewName = TEXT("User.New");
-	Payload->TypeFingerprint = HashOf(TEXT('2'));
-	Payload->DefaultFingerprint = HashOf(TEXT('3'));
-	Payload->SemanticFingerprint =
-		FHyperAIStudioNiagaraContracts::ComputeRenameSemanticFingerprint(*Payload);
-	const TSharedRef<const IHyperAIStudioTypedArtifactPayload, ESPMode::ThreadSafe> Clone =
-		Payload->CloneImmutable();
+	FHyperAINiagaraEditOp First = MakeOp(TEXT("set_module_enabled"));
+	First.EmitterName = TEXT("A");
+	First.ScriptName = TEXT("ParticleUpdateScript");
+	First.ModuleName = TEXT("M1");
+	FHyperAINiagaraEditOp Second = First;
+	Second.ModuleName = TEXT("M2");
+	Second.bEnabled = false;
+	Payload->Ops = { First, Second };
+	Payload->SemanticFingerprint = FHyperAIStudioNiagaraContracts::ComputeEditOpsSemanticFingerprint(*Payload);
+	TestTrue(TEXT("fingerprint is canonical"),
+		FHyperAIStudioNiagaraContracts::IsCanonicalSha256(Payload->SemanticFingerprint));
+	TestEqual(TEXT("fingerprint is stable"), Payload->SemanticFingerprint,
+		FHyperAIStudioNiagaraContracts::ComputeEditOpsSemanticFingerprint(*Payload));
+
+	FHyperAIStudioNiagaraEditOpsPayload Reordered = *Payload;
+	Reordered.Ops = { Second, First };
+	TestNotEqual(TEXT("reordered ops are a different plan"), Payload->SemanticFingerprint,
+		FHyperAIStudioNiagaraContracts::ComputeEditOpsSemanticFingerprint(Reordered));
+	FHyperAIStudioNiagaraEditOpsPayload Unsaved = *Payload;
+	Unsaved.bSave = false;
+	TestNotEqual(TEXT("save choice is sealed"), Payload->SemanticFingerprint,
+		FHyperAIStudioNiagaraContracts::ComputeEditOpsSemanticFingerprint(Unsaved));
+
+	const TSharedRef<const IHyperAIStudioTypedArtifactPayload, ESPMode::ThreadSafe> Clone = Payload->CloneImmutable();
 	TestTrue(TEXT("clone is detached"), &Clone.Get() != &Payload.Get());
-	TestEqual(TEXT("clone type preserved"), Clone->GetTypeId(), Payload->GetTypeId());
-	TestEqual(TEXT("clone schema preserved"), Clone->GetSchemaFingerprint(),
-		Payload->GetSchemaFingerprint());
-	TestEqual(TEXT("clone semantic seal preserved"), Clone->GetSemanticFingerprint(),
-		Payload->GetSemanticFingerprint());
-	TestEqual(TEXT("clone bounded size preserved"), Clone->GetBoundedByteSize(),
-		Payload->GetBoundedByteSize());
+	TestEqual(TEXT("clone seal preserved"), Clone->GetSemanticFingerprint(), Payload->GetSemanticFingerprint());
+	TestEqual(TEXT("clone size preserved"), Clone->GetBoundedByteSize(), Payload->GetBoundedByteSize());
 
 	FHyperAIStudioNiagaraDomainAdapter Adapter;
-	const FHyperAIStudioDomainAdapterResult Result = Adapter.Execute(
-		MakeMutationContext(), *Payload);
-	TestEqual(TEXT("edit rejected before effect"), Result.Outcome,
+	const FHyperAIStudioDomainAdapterResult Apply = Adapter.Execute(
+		MakeMutationContext(EHyperAIStudioDomainExecutionActionKind::Apply), *Clone);
+	TestEqual(TEXT("apply on a missing target is rejected before effect"), Apply.Outcome,
 		EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect);
-	TestEqual(TEXT("exact async host status"), Result.StatusCode,
-		FString(FHyperAIStudioNiagaraContracts::NonDryCallableState));
-	TestFalse(TEXT("no mutation result claimed"), Result.Payload.IsValid());
+	TestEqual(TEXT("missing target status"), Apply.StatusCode, FString(TEXT("target_not_loaded")));
+	TestFalse(TEXT("rejected apply claims no result"), Apply.Payload.IsValid());
 
-	Payload->NewName = TEXT("User.Drifted");
+	// After Apply, the edit may already be in memory: a later phase failing must never look effect-free.
+	const FHyperAIStudioDomainAdapterResult Save = Adapter.Execute(
+		MakeMutationContext(EHyperAIStudioDomainExecutionActionKind::Save), *Clone);
+	TestEqual(TEXT("post-apply failure reports a known effect"), Save.Outcome,
+		EHyperAIStudioDomainDispatchOutcome::FailedAfterKnownEffect);
+
+	Payload->Ops[0].ModuleName = TEXT("Drifted");
 	const FHyperAIStudioDomainAdapterResult Drifted = Adapter.Execute(
-		MakeMutationContext(), *Payload);
-	TestEqual(TEXT("semantic drift rejected"), Drifted.StatusCode,
-		FString(TEXT("typed_payload_drift")));
-	TestEqual(TEXT("drift rejected before effect"), Drifted.Outcome,
-		EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect);
-	FHyperAIStudioNiagaraFreshVerifier Verifier(
-		Adapter.GetDescriptor().AdapterFingerprint);
-	FHyperAIStudioNiagaraMutationResultPayload MutationResult;
-	MutationResult.Phase = TEXT("completed");
-	MutationResult.Revision = HashOf(TEXT('4'));
-	MutationResult.bValid = true;
-	FString PostconditionHash;
+		MakeMutationContext(EHyperAIStudioDomainExecutionActionKind::Apply), *Payload);
+	TestEqual(TEXT("semantic drift rejected"), Drifted.StatusCode, FString(TEXT("typed_payload_drift")));
+
+	FHyperAIStudioNiagaraFreshVerifier Verifier(Adapter.GetDescriptor().AdapterFingerprint);
+	FHyperAIStudioNiagaraMutationResultPayload NotCompleted;
+	NotCompleted.Phase = TEXT("saved");
+	NotCompleted.Revision = HashOf(TEXT('4'));
+	NotCompleted.bValid = true;
+	FString Postcondition;
 	FString VerifyError;
-	TestFalse(TEXT("fresh PASS blocked until independent bounded validator exists"),
-		Verifier.VerifyFreshExact(*Clone, MutationResult, PostconditionHash, VerifyError));
-	TestEqual(TEXT("fresh verifier machine blocker"), VerifyError,
-		FString(TEXT("native_rule_execution_not_hard_bounded")));
-	TestTrue(TEXT("blocked verifier emits no postcondition hash"), PostconditionHash.IsEmpty());
+	TestFalse(TEXT("only a completed capture verifies"),
+		Verifier.VerifyFreshExact(*Clone, NotCompleted, Postcondition, VerifyError));
+	TestTrue(TEXT("failed verification emits no postcondition"), Postcondition.IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHyperAIStudioNiagaraEndToEndTest,
+	"HyperAIStudio.Niagara.Mutation.EndToEndToggleModule",
+	HyperAIStudio::Niagara::Tests::Flags)
+
+bool FHyperAIStudioNiagaraEndToEndTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	// Planning accepts only a System loaded from disk, so this spans two editor sessions: the first saves a
+	// duplicate fixture of a project System, the second loads that fixture fresh and edits it. The fixture lives
+	// in Content/__HyperAIStudioTests; delete that folder once done. Nothing here edits an original asset.
+	const FString FixtureFolder = TEXT("/Game/__HyperAIStudioTests");
+	const FString FixtureName = TEXT("NS_HyperAIEditOpsE2E");
+	const FString PackageName = FixtureFolder / FixtureName;
+	const FString TargetPath = PackageName + TEXT(".") + FixtureName;
+
+	if (!FPackageName::DoesPackageExist(PackageName))
+	{
+		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+		TArray<FAssetData> Candidates;
+		Registry.GetAssetsByClass(UNiagaraSystem::StaticClass()->GetClassPathName(), Candidates);
+		const FAssetData* Source = Candidates.FindByPredicate([&](const FAssetData& Asset)
+		{
+			const FString Package = Asset.PackageName.ToString();
+			return Package.StartsWith(TEXT("/Game/")) && !Package.StartsWith(FixtureFolder);
+		});
+		if (!Source)
+		{
+			AddInfo(TEXT("Skipped: no Niagara System under /Game to duplicate."));
+			return true;
+		}
+		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
+		UObject* Fixture = AssetTools.DuplicateAsset(FixtureName, FixtureFolder, Source->GetAsset());
+		TestNotNull(TEXT("fixture duplicated"), Fixture);
+		if (Fixture)
+		{
+			TestTrue(TEXT("fixture saved"), UEditorLoadingAndSavingUtils::SavePackages({ Fixture->GetOutermost() }, false));
+		}
+		AddWarning(FString::Printf(TEXT("Created fixture %s from %s. Run this test again in a new editor session to exercise the edit path."),
+			*TargetPath, *Source->PackageName.ToString()));
+		return true;
+	}
+
+	UNiagaraSystem* System = Cast<UNiagaraSystem>(FSoftObjectPath(TargetPath).TryLoad());
+	if (!System || !System->HasAnyFlags(RF_WasLoaded))
+	{
+		AddWarning(TEXT("The fixture was created in this session and is not loaded from disk yet; run again in a new editor session."));
+		return true;
+	}
+	// A freshly loaded System may not have compiled yet; planning requires a finished compile.
+	System->RequestCompile(/*bForce=*/false);
+	System->WaitForCompilationComplete(/*bIncludingGPUShaders=*/true, /*bShowProgress=*/false);
+
+	FHyperAINiagaraInspectRequest InspectRequest;
+	InspectRequest.TargetPath = TargetPath;
+	InspectRequest.bIncludeTopology = true;
+	InspectRequest.MaxOutputBytes = FHyperAIStudioNiagaraContracts::MaxOutputBytes;
+	const FHyperAINiagaraInspectReport Inspect = FHyperAIStudioNiagaraContracts::Inspect(InspectRequest);
+	FString CaptureCodes;
+	for (const FHyperAINiagaraIssue& Issue : Inspect.Issues)
+	{
+		CaptureCodes += Issue.Code + TEXT(" ");
+	}
+	TestTrue(*FString::Printf(TEXT("fixture inspects cleanly (%s: %s)"), *Inspect.Status, *CaptureCodes), Inspect.bOk);
+	TestFalse(TEXT("topology returned"), Inspect.Emitters.IsEmpty());
+
+	// Late particle-update modules (colour, scale) can be disabled without breaking the stack; state modules cannot.
+	FHyperAINiagaraEditOp Toggle = HyperAIStudio::Niagara::Tests::MakeOp(TEXT("set_module_enabled"));
+	for (const FHyperAINiagaraEmitterTopology& Emitter : Inspect.Emitters)
+	{
+		for (const FHyperAINiagaraScriptStackTopology& Stack : Emitter.ScriptStacks)
+		{
+			if (Stack.ScriptName != TEXT("ParticleUpdateScript") || !Toggle.ModuleName.IsEmpty())
+			{
+				continue;
+			}
+			for (int32 Index = Stack.Modules.Num() - 1; Index >= 0; --Index)
+			{
+				const FHyperAINiagaraModuleTopology& Module = Stack.Modules[Index];
+				if (!Module.ModuleName.Contains(TEXT("State")) && !Module.ModuleName.Contains(TEXT("Initialize")))
+				{
+					Toggle.EmitterName = Emitter.EmitterName;
+					Toggle.ScriptName = Stack.ScriptName;
+					Toggle.ModuleName = Module.ModuleName;
+					Toggle.bEnabled = !Module.bEnabled;
+					break;
+				}
+			}
+		}
+	}
+	if (!Inspect.bOk || Toggle.ModuleName.IsEmpty())
+	{
+		AddError(TEXT("The fixture has no ParticleUpdateScript module suitable for toggling, or did not inspect cleanly."));
+		return false;
+	}
+
+	// This test approves nothing by hand, so it runs with the approval gate off and puts it back after.
+	UHyperAIStudioSettings* Settings = GetMutableDefault<UHyperAIStudioSettings>();
+	const bool bPreviousApproval = Settings->bRequireApprovalForAgentEdits;
+	Settings->bRequireApprovalForAgentEdits = false;
+	ON_SCOPE_EXIT { Settings->bRequireApprovalForAgentEdits = bPreviousApproval; };
+
+	FHyperAINiagaraApplyPlanRequest Plan;
+	Plan.TargetPath = TargetPath;
+	Plan.ExpectedRevision = Inspect.Revision;
+	Plan.Ops = { Toggle };
+	const FHyperAINiagaraApplyPlanReport DryRun = FHyperAIStudioNiagaraContracts::BuildPlan(Plan);
+	TestTrue(*FString::Printf(TEXT("dry run prepares (%s: %s)"), *DryRun.Status, *DryRun.Diagnostic),
+		DryRun.bOk && DryRun.bTrustedPrepared);
+	TestFalse(TEXT("dry run stages nothing"), DryRun.bStaged);
+	if (!DryRun.bOk)
+	{
+		return false;
+	}
+
+	Plan.bDryRun = false;
+	Plan.OperationId = TEXT("niagara-e2e-") + FGuid::NewGuid().ToString(EGuidFormats::Digits).ToLower();
+	Plan.ExpectedPlanHash = DryRun.PlanHash;
+	const FHyperAINiagaraApplyPlanReport Submitted = FHyperAIStudioNiagaraContracts::BuildPlan(Plan);
+	TestTrue(*FString::Printf(TEXT("submission accepted (%s: %s)"), *Submitted.Status, *Submitted.Diagnostic),
+		Submitted.bExecutionSubmitted);
+
+	FHyperAIStudioTypedArtifactOperationStatus OperationStatus;
+	FString StatusError;
+	for (int32 Tick = 0; Tick < 400 && Submitted.bExecutionSubmitted; ++Tick)
+	{
+		FTSTicker::GetCoreTicker().Tick(0.01f);
+		if (FHyperAIStudioTrustedExecutionFacade::QueryStatus(Plan.OperationId, OperationStatus, StatusError)
+			&& OperationStatus.bTerminal)
+		{
+			break;
+		}
+	}
+	TestTrue(*FString::Printf(TEXT("operation reaches a terminal state (%s)"), *OperationStatus.Status), OperationStatus.bTerminal);
+	TestEqual(*FString::Printf(TEXT("operation completed (%s)"), *OperationStatus.Diagnostic),
+		OperationStatus.Status, FString(TEXT("completed")));
+
+	FHyperAINiagaraInspectRequest After = InspectRequest;
+	const FHyperAINiagaraInspectReport Final = FHyperAIStudioNiagaraContracts::Inspect(After);
+	bool bFlipped = false;
+	for (const FHyperAINiagaraEmitterTopology& Emitter : Final.Emitters)
+	{
+		for (const FHyperAINiagaraScriptStackTopology& Stack : Emitter.ScriptStacks)
+		{
+			for (const FHyperAINiagaraModuleTopology& Module : Stack.Modules)
+			{
+				bFlipped |= Emitter.EmitterName == Toggle.EmitterName && Stack.ScriptName == Toggle.ScriptName
+					&& Module.ModuleName == Toggle.ModuleName && Module.bEnabled == Toggle.bEnabled;
+			}
+		}
+	}
+	TestTrue(*FString::Printf(TEXT("%s/%s/%s is now %s"), *Toggle.EmitterName, *Toggle.ScriptName, *Toggle.ModuleName,
+		Toggle.bEnabled ? TEXT("enabled") : TEXT("disabled")), bFlipped);
+	TestFalse(TEXT("the edit was saved"), System->GetOutermost()->IsDirty());
 	return true;
 }
 
@@ -418,18 +548,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FHyperAIStudioNiagaraPublicApiAuditTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	using FRenameSignature = void (*)(UNiagaraSystem&, const FNiagaraVariableBase&,
-		const FNiagaraVariableBase&);
-	FRenameSignature RenameApi =
-		&FNiagaraEditorUtilities::UserParameters::RenameUserParameterForSystem;
+	// Experimental external-edit signatures are audited at compile time inside the gate's .cpp.
 	using FExistingViewModelSignature = TSharedPtr<FNiagaraSystemViewModel>
 		(FNiagaraEditorModule::*)(UNiagaraSystem*);
 	FExistingViewModelSignature ExistingViewModelApi =
 		&FNiagaraEditorModule::GetExistingViewModelForSystem;
-	using FCompileStateSignature = void (*)(UNiagaraSystem*,
-		FNiagaraExt_SystemCompileState&, FNiagaraExternalEditContext&);
-	FCompileStateSignature CompileStateApi =
-		&UNiagaraExternalEditUtilities::GetSystemCompileState;
 	using FRequestCompileReturn = decltype(DeclVal<UNiagaraSystem&>().RequestCompile(
 		false, nullptr, nullptr));
 	using FPackageExistsReturn = decltype(DeclVal<IAssetRegistry&>().TryGetAssetPackageData(
@@ -438,9 +561,8 @@ bool FHyperAIStudioNiagaraPublicApiAuditTest::RunTest(const FString& Parameters)
 		"UE 5.8 UNiagaraSystem::RequestCompile return type changed");
 	static_assert(std::is_same_v<FPackageExistsReturn, UE::AssetRegistry::EExists>,
 		"UE 5.8 non-blocking package tri-state changed");
-	TestTrue(TEXT("public full-reference rename API signature"), RenameApi != nullptr);
 	TestTrue(TEXT("public existing-ViewModel lookup API signature"), ExistingViewModelApi != nullptr);
-	TestTrue(TEXT("public nonblocking compile-state API signature"), CompileStateApi != nullptr);
+	TestTrue(TEXT("external edit API present"), HyperAIStudio::Niagara::ExternalEditGate::IsApiAvailable());
 	return true;
 }
 

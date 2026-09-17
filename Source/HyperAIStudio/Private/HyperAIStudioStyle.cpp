@@ -9,6 +9,7 @@
 #include "Styling/CoreStyle.h"
 #include "Styling/SlateStyle.h"
 #include "Styling/SlateStyleRegistry.h"
+#include "Styling/SlateTypes.h"
 #include "Styling/StyleColors.h"
 
 TSharedPtr<FSlateStyleSet> FHyperAIStudioStyle::Instance;
@@ -34,6 +35,8 @@ void FHyperAIStudioStyle::Register()
 	// A badge is state, not chrome: a rounded outlined pill instead of the flat recessed panel brush.
 	Style->Set("HyperAIStudio.Badge", new FSlateRoundedBoxBrush(FStyleColors::Input, 4.0f, FStyleColors::InputOutline, 1.0f));
 	Style->Set("HyperAIStudio.Panel", new FSlateRoundedBoxBrush(FStyleColors::Recessed, 4.0f));
+	// Tinted at use with the terminal's own background, so padding around the cell grid reads as part of the terminal.
+	Style->Set("HyperAIStudio.TerminalFrame", new FSlateRoundedBoxBrush(FLinearColor::White, 6.0f));
 	Style->Set("HyperAIStudio.TabIcon", new FSlateVectorImageBrush(Style->RootToContentDir(TEXT("HyperAIStudioTab"), TEXT(".svg")), FVector2f(16.0f, 16.0f)));
 
 	FSlateStyleRegistry::RegisterSlateStyle(*Style);

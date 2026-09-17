@@ -76,6 +76,18 @@ public:
 		const TArray<FString>& ExactToolNames,
 		FHyperAIStudioExtensionCohortAdmission& OutAdmission);
 
+	/**
+	 * Why QueryExactGeneratedCohort would refuse this cohort, in words a person can act on, or an empty
+	 * string when it matches. Read-only: it loads nothing and changes nothing.
+	 *
+	 * A cohort that disagrees with the generated catalog by one tool name is refused in full, and the
+	 * module silently never loads. This turns that silence into a sentence naming what diverged.
+	 */
+	static FString DescribeExactGeneratedCohortMismatch(
+		const FString& PackId,
+		const FString& AtomicCohortId,
+		const TArray<FString>& ExactToolNames);
+
 	/** Exact generated cohorts register only when the Extended Hyper Tools set is enabled. */
 	static bool IsExactGeneratedCohortRegistrationAllowed(
 		const FString& PackId,

@@ -228,6 +228,125 @@ bool FHyperAIStudioExtensionRuntime::IsExactGeneratedCohortRegistrationAllowed(
 		&& bAllowSourceCandidateForDev && AreSourceCandidateToolsEnabled();
 }
 
+FString FHyperAIStudioExtensionRuntime::DescribeExactGeneratedCohortMismatch(
+	const FString& PackId,
+	const FString& AtomicCohortId,
+	const TArray<FString>& ExactToolNames)
+{
+	TArray<FString> CatalogErrors;
+	if (!FHyperAIStudioCapabilityPackRegistry::ValidateBuiltInCatalog(CatalogErrors))
+	{
+		return FString::Printf(TEXT("the generated catalog itself failed validation (%s)"),
+			CatalogErrors.Num() > 0 ? *CatalogErrors[0] : TEXT("no reason reported"));
+	}
+	if (PackId.IsEmpty() || AtomicCohortId.IsEmpty() || ExactToolNames.IsEmpty())
+	{
+		return TEXT("the module declares an empty pack id, cohort id or tool list");
+	}
+
+	const FHyperAIStudioCapabilityCatalog& Catalog = FHyperAIStudioCapabilityPackRegistry::GetCatalog();
+	const FHyperAIStudioCapabilityPackDefinition* Pack = nullptr;
+	int32 PackMatches = 0;
+	for (const FHyperAIStudioCapabilityPackDefinition& Candidate : Catalog.Packs)
+	{
+		if (Candidate.Id == PackId)
+		{
+			Pack = &Candidate;
+			++PackMatches;
+		}
+	}
+	if (!Pack)
+	{
+		return FString::Printf(
+			TEXT("the catalog has no pack '%s'. Regenerate the catalog with this pack included."), *PackId);
+	}
+	if (PackMatches != 1)
+	{
+		return FString::Printf(TEXT("the catalog defines pack '%s' %d times"), *PackId, PackMatches);
+	}
+	if (!Pack->AtomicCohortIds.Contains(AtomicCohortId))
+	{
+		return FString::Printf(TEXT("pack '%s' does not list cohort '%s'"), *PackId, *AtomicCohortId);
+	}
+
+	TSet<FString> CatalogNames;
+	TOptional<EHyperAIStudioCapabilityAdmissionState> CohortState;
+	bool bMixedAdmission = false;
+	for (const FHyperAIStudioCapabilityToolDefinition& Tool : Catalog.Tools)
+	{
+		if (Tool.PackId != PackId || Tool.AtomicCohortId != AtomicCohortId)
+		{
+			continue;
+		}
+		CatalogNames.Add(Tool.Name);
+		if (!CohortState.IsSet())
+		{
+			CohortState = Tool.AdmissionState;
+		}
+		bMixedAdmission |= CohortState.GetValue() != Tool.AdmissionState;
+	}
+
+	TArray<FString> MissingFromCatalog;
+	for (const FString& Name : ExactToolNames)
+	{
+		if (!CatalogNames.Contains(Name))
+		{
+			MissingFromCatalog.Add(Name);
+		}
+	}
+	TArray<FString> MissingFromModule;
+	for (const FString& Name : CatalogNames)
+	{
+		if (!ExactToolNames.Contains(Name))
+		{
+			MissingFromModule.Add(Name);
+		}
+	}
+	if (!MissingFromCatalog.IsEmpty() || !MissingFromModule.IsEmpty())
+	{
+		FString Reason = FString::Printf(TEXT("the tool list disagrees with the catalog for cohort '%s'."), *AtomicCohortId);
+		if (!MissingFromCatalog.IsEmpty())
+		{
+			Reason += FString::Printf(TEXT(" The module declares, but the catalog lacks: %s."),
+				*FString::Join(MissingFromCatalog, TEXT(", ")));
+		}
+		if (!MissingFromModule.IsEmpty())
+		{
+			Reason += FString::Printf(TEXT(" The catalog declares, but the module lacks: %s."),
+				*FString::Join(MissingFromModule, TEXT(", ")));
+		}
+		return Reason;
+	}
+	if (!CohortState.IsSet())
+	{
+		return FString::Printf(TEXT("the catalog lists no tools at all for cohort '%s'"), *AtomicCohortId);
+	}
+	if (bMixedAdmission)
+	{
+		return FString::Printf(TEXT("the catalog gives cohort '%s' tools more than one admission state"), *AtomicCohortId);
+	}
+	if (Pack->AdmissionState != CohortState.GetValue())
+	{
+		return FString::Printf(
+			TEXT("pack '%s' and its tools disagree about admission state"), *PackId);
+	}
+	for (const FString& Name : ExactToolNames)
+	{
+		int32 PackNameMatches = 0;
+		for (const FString& PackToolName : Pack->ToolNames)
+		{
+			PackNameMatches += PackToolName == Name ? 1 : 0;
+		}
+		if (PackNameMatches != 1)
+		{
+			return FString::Printf(
+				TEXT("pack '%s' lists tool '%s' %d times in its own tool names; it must appear exactly once"),
+				*PackId, *Name, PackNameMatches);
+		}
+	}
+	return FString();
+}
+
 FString FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(const FString& Value)
 {
 	return FHyperAIStudioPlanExecuteContracts::ComputeBoundedSha256(Value);

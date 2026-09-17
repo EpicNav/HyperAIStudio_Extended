@@ -53,6 +53,21 @@ public:
 		return Terminal.Parser.bBracketedPaste;
 	}
 
+	static FString HyperAIStudio_ReadVisibleTail(const STerminal& Terminal, const int32 MaxRows)
+	{
+		const FTerminalBuffer& Buffer = Terminal.Buffer;
+		const int32 Columns = Buffer.GetColumns();
+		const int32 TotalRows = Buffer.GetTotalRows();
+		const int32 Rows = FMath::Clamp(MaxRows, 1, Buffer.GetViewportRows());
+		if (Columns <= 0 || TotalRows <= 0)
+		{
+			return FString();
+		}
+		const int32 LastRow = TotalRows - 1;
+		const int32 FirstRow = FMath::Max(0, LastRow - Rows + 1);
+		return Buffer.GetTextInRange(FirstRow, 0, LastRow, Columns - 1);
+	}
+
 	static bool HyperAIStudio_WriteRaw(STerminal& Terminal, TConstArrayView<uint8> Bytes)
 	{
 		if (!Terminal.Session.IsValid() || Bytes.IsEmpty())
@@ -132,6 +147,16 @@ namespace HyperAIStudio::TerminalRawInput
 		return FSTerminalSpec::HyperAIStudio_WriteRaw(Terminal, Bytes);
 	}
 
+	FString ReadVisibleTail(const STerminal& Terminal, const int32 MaxRows)
+	{
+		return FSTerminalSpec::HyperAIStudio_ReadVisibleTail(Terminal, MaxRows);
+	}
+
+	double GetLastOutputTime(const STerminal& Terminal)
+	{
+		return Terminal.GetLastOutputTime();
+	}
+
 	bool WriteText(STerminal& Terminal, const FString& Text, bool bAppendCarriageReturn)
 	{
 		const TArray<uint8> Bytes = BuildPastePayload(Text, IsBracketedPasteEnabled(Terminal), bAppendCarriageReturn);
@@ -143,5 +168,7 @@ namespace HyperAIStudio::TerminalRawInput
 	bool IsBracketedPasteEnabled(const STerminal&) { return false; }
 	bool WriteRawBytes(STerminal&, TConstArrayView<uint8>) { return false; }
 	bool WriteText(STerminal&, const FString&, bool) { return false; }
+	FString ReadVisibleTail(const STerminal&, int32) { return FString(); }
+	double GetLastOutputTime(const STerminal&) { return 0.0; }
 #endif
 }

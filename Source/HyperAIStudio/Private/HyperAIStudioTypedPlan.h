@@ -217,6 +217,27 @@ struct FHyperAIStudioPlanStep
 	bool bVerifyFreshOnce = false;
 };
 
+/**
+ * Game-thread budget each finalizer action gets per target. General typed plans keep these defaults; typed-artifact
+ * mutations raise them to measured editor-asset costs (saving a package alone takes far longer than 10 ms).
+ */
+struct FHyperAIStudioPlanFinalizerBudgets
+{
+	int32 CompileGameThreadMs = 20;
+	int32 ValidateGameThreadMs = 5;
+	int32 SaveGameThreadMs = 10;
+	int32 VerifyFreshGameThreadMs = 5;
+
+	bool IsDefault() const
+	{
+		const FHyperAIStudioPlanFinalizerBudgets Default;
+		return CompileGameThreadMs == Default.CompileGameThreadMs
+			&& ValidateGameThreadMs == Default.ValidateGameThreadMs
+			&& SaveGameThreadMs == Default.SaveGameThreadMs
+			&& VerifyFreshGameThreadMs == Default.VerifyFreshGameThreadMs;
+	}
+};
+
 struct FHyperAIStudioValidatedPlan
 {
 	static constexpr const TCHAR* SchemaVersion = TEXT("hyperai.plan.v1");
@@ -235,6 +256,7 @@ struct FHyperAIStudioValidatedPlan
 	FString AuthorizationToken;
 	EHyperAIStudioPlanSafety MaximumSafety = EHyperAIStudioPlanSafety::Read;
 	FHyperAIStudioPlanBudget Budget;
+	FHyperAIStudioPlanFinalizerBudgets FinalizerBudgets;
 	TArray<FHyperAIStudioPlanStep> Steps;
 	TArray<int32> OrderedStepIndices;
 };

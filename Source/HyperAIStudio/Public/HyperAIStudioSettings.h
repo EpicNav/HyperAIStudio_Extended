@@ -223,12 +223,28 @@ public:
 	bool bAllowClipboardPromptCopy = true;
 
 	/**
-	 * Keep HyperAI Chat prompt history across editor restarts, in this user's Saved/Config EditorPerProjectUserSettings.ini.
-	 * Off by default because prompts can contain confidential project text. History is always kept for the current session,
-	 * and Clear History in the chat panel also removes anything already saved.
+	 * Hold every agent asset edit in the chat panel's Activity view until you approve it. Turn this off and
+	 * edits run as soon as the agent submits them. Destructive and external-effect tools always need approval,
+	 * because their server grant is issued only by that click.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow")
-	bool bPersistPromptHistory = false;
+	bool bRequireApprovalForAgentEdits = true;
+
+	/**
+	 * Lines that mean an agent is waiting for an answer: a permission prompt, a choice, a confirmation.
+	 * Matched case-insensitively against the last rows of that tab's terminal. Empty restores the built-in list.
+	 * These exist because agent CLIs change their wording; editing them here beats waiting for a plugin build.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Tab Status")
+	TArray<FString> AgentNeedsInputPatterns;
+
+	/** Lines that mean an agent is showing a plan and waiting to be told to go ahead. */
+	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Tab Status")
+	TArray<FString> AgentPlanReviewPatterns;
+
+	/** Lines that mean an agent cannot proceed: a rate limit, a login, a busy editor lane. */
+	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Tab Status")
+	TArray<FString> AgentBlockedPatterns;
 
 	/** Models offered per chat agent. Agents without an entry get one the first time HyperAI Chat opens. */
 	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Models")

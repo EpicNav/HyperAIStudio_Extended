@@ -54,7 +54,9 @@ bool FHyperAIStudioAgentModelTest::RunTest(const FString& Parameters)
 	ExpectRejected(TEXT("A format with a quote"), TEXT("opus"), TEXT("--model \"{0}\""));
 	ExpectRejected(TEXT("An empty format"), TEXT("opus"), FString());
 
+	// NewObject copies the CDO, which HyperAI Chat may already have seeded; start genuinely empty.
 	UHyperAIStudioSettings* Settings = NewObject<UHyperAIStudioSettings>(GetTransientPackage());
+	Settings->AgentModelRoutes.Reset();
 	TestTrue(TEXT("Defaults are added to empty settings"), Settings->EnsureDefaultAgentModelRoutes());
 	TestFalse(TEXT("Adding defaults again changes nothing"), Settings->EnsureDefaultAgentModelRoutes());
 	TestNotNull(TEXT("Codex has a route"), Settings->FindAgentModelRoute(TEXT("Codex")));

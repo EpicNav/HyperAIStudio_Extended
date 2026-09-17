@@ -403,9 +403,22 @@ namespace HyperAIStudio::TypedArtifact::Private
 		const int32 ReservedNativeOperations = (Contract.bCompileOnce ? 1 : 0)
 			+ (Contract.bValidateOnce ? 1 : 0) + (Contract.bSaveOnce ? 1 : 0)
 			+ (Contract.bVerifyFreshOnce ? 1 : 0);
-		const int32 ReservedGameThreadMs = (Contract.bCompileOnce ? 20 : 0)
-			+ (Contract.bValidateOnce ? 5 : 0) + (Contract.bSaveOnce ? 10 : 0)
-			+ (Contract.bVerifyFreshOnce ? 5 : 0);
+		// Only contracts that ask for artifact-scale work get the measured editor-asset finalizer budgets; synchronous
+		// contracts keep the default reserves, and with them their step budgets and plan hashes.
+		FHyperAIStudioPlanFinalizerBudgets FinalizerBudgets;
+		if (Contract.MaxGameThreadMs > FHyperAIStudioTypedArtifactLimits::MaxSynchronousGameThreadMs)
+		{
+			FinalizerBudgets = {
+				FHyperAIStudioTypedArtifactLimits::CompileGameThreadMs,
+				FHyperAIStudioTypedArtifactLimits::ValidateGameThreadMs,
+				FHyperAIStudioTypedArtifactLimits::SaveGameThreadMs,
+				FHyperAIStudioTypedArtifactLimits::VerifyFreshGameThreadMs};
+		}
+		const int32 ReservedGameThreadMs =
+			(Contract.bCompileOnce ? FinalizerBudgets.CompileGameThreadMs : 0)
+			+ (Contract.bValidateOnce ? FinalizerBudgets.ValidateGameThreadMs : 0)
+			+ (Contract.bSaveOnce ? FinalizerBudgets.SaveGameThreadMs : 0)
+			+ (Contract.bVerifyFreshOnce ? FinalizerBudgets.VerifyFreshGameThreadMs : 0);
 		const int32 ReservedOutputBytes = (Contract.bCompileOnce ? 256 : 0)
 			+ (Contract.bValidateOnce ? 512 : 0) + (Contract.bSaveOnce ? 256 : 0)
 			+ (Contract.bVerifyFreshOnce ? 512 : 0);
@@ -425,6 +438,8 @@ namespace HyperAIStudio::TypedArtifact::Private
 		Step.bVerifyFreshOnce = Contract.bVerifyFreshOnce;
 
 		OutPlan = FHyperAIStudioValidatedPlan{};
+		// Must match the reserves above: the scheduler gives each finalizer exactly this budget.
+		OutPlan.FinalizerBudgets = FinalizerBudgets;
 		OutPlan.bValidated = true;
 		OutPlan.bDryRun = false;
 		OutPlan.bHasMutation = true;
@@ -803,10 +818,10 @@ bool FHyperAIStudioTypedArtifactExecutor::Prepare(
 		|| Contract.EffectTarget.IsEmpty()
 		|| Contract.EffectTarget.Len() > FHyperAIStudioTypedArtifactLimits::MaxEffectTargetChars
 		|| Contract.DeadlineMs < 100
-		|| Contract.DeadlineMs > FHyperAIStudioTypedArtifactLimits::MaxSynchronousDeadlineMs
+		|| Contract.DeadlineMs > FHyperAIStudioTypedArtifactLimits::MaxArtifactDeadlineMs
 		|| Contract.MaxNativeOperations < 5 || Contract.MaxNativeOperations > FHyperAIStudioPlanLimits::MaxNativeOperations
 		|| Contract.MaxGameThreadMs < 50
-		|| Contract.MaxGameThreadMs > FHyperAIStudioTypedArtifactLimits::MaxSynchronousGameThreadMs
+		|| Contract.MaxGameThreadMs > FHyperAIStudioTypedArtifactLimits::MaxArtifactGameThreadMs
 		|| Contract.MaxOutputBytes < 2048 || Contract.MaxOutputBytes > FHyperAIStudioPlanLimits::MaxOutputBytes
 		|| Contract.MaxResultBytes < 128 || Contract.MaxResultBytes > 256
 		|| Contract.StageLifetimeMs < 100 || Contract.StageLifetimeMs > FHyperAIStudioTypedArtifactLimits::MaxStageLifetimeMs

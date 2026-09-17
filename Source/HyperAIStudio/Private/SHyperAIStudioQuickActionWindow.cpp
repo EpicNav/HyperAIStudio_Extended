@@ -5,12 +5,28 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "HyperAIStudioAgentChatHistory.h"
 #include "HyperAIStudioStyle.h"
 #include "HyperAIStudioTerminalRawInput.h"
 #include "ISettingsModule.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
-#include "SHyperAIStudioPromptComposer.h"
+#include "ContentBrowserModule.h"
+#include "Dom/JsonObject.h"
+#include "DragAndDrop/ActorDragDropOp.h"
+#include "DragAndDrop/AssetDragDropOp.h"
+#include "Editor.h"
+#include "Framework/Docking/TabManager.h"
+#include "Engine/Selection.h"
+#include "IContentBrowserSingleton.h"
+#include "HAL/FileManager.h"
+#include "Interfaces/IPluginManager.h"
+#include "Misc/FileHelper.h"
+#include "HyperAIStudioApprovalGate.h"
+#include "SHyperAIStudioActivitySidebar.h"
+#include "SHyperAIStudioChatHistorySidebar.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "STerminal.h"
 #include "Styling/AppStyle.h"
 #include "Styling/StyleColors.h"
@@ -27,6 +43,7 @@
 #include "Widgets/Layout/SScrollBar.h"
 #include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Text/STextBlock.h"
 
 #define LOCTEXT_NAMESPACE "SHyperAIStudioQuickActionWindow"
@@ -63,9 +80,51 @@ namespace HyperAIStudio::QuickAction
 		}
 	}
 
+	constexpr float ChatSidebarWidth = 280.0f;
+
+	/**
+	 * The terminal paints its colour scheme's background; the frame around it takes the same colour so the padding
+	 * blends in. The Terminal plugin keeps its parsed schemes private, so read the selected scheme's JSON directly.
+	 */
+	FLinearColor TerminalBackgroundColor()
+	{
+		static FString CachedSchemeName;
+		static FColor CachedBackground(0x1E, 0x1E, 0x1E);
+		const UTerminalSettings* Settings = GetDefault<UTerminalSettings>();
+		const FString SchemeName = Settings ? Settings->ColorSchemeName : FString(TEXT("Default"));
+		if (SchemeName != CachedSchemeName)
+		{
+			CachedSchemeName = SchemeName;
+			CachedBackground = FColor(0x1E, 0x1E, 0x1E);
+			const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("Terminal"));
+			const FString Directory = Plugin ? Plugin->GetBaseDir() / TEXT("Config") / TEXT("ColorSchemes") : FString();
+			TArray<FString> Files;
+			if (!Directory.IsEmpty() && SchemeName != TEXT("Default"))
+			{
+				IFileManager::Get().FindFiles(Files, *(Directory / TEXT("*.json")), true, false);
+			}
+			for (const FString& File : Files)
+			{
+				FString Json;
+				TSharedPtr<FJsonObject> Scheme;
+				FString Name;
+				FString Hex;
+				if (FFileHelper::LoadFileToString(Json, *(Directory / File))
+					&& FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Scheme) && Scheme.IsValid()
+					&& Scheme->TryGetStringField(TEXT("name"), Name) && Name == SchemeName
+					&& Scheme->TryGetStringField(TEXT("defaultBackground"), Hex))
+				{
+					CachedBackground = FColor::FromHex(Hex);
+					break;
+				}
+			}
+		}
+		return FLinearColor(CachedBackground);
+	}
+
 	FText InitialReadyMessage()
 	{
-		return LOCTEXT("InitialReadyMessage", "Message the agent from the box under the terminal: Enter sends, Shift+Enter adds a line, Up recalls history. Copy Prompt is only for manual handoff/context fallback.");
+		return LOCTEXT("InitialReadyMessage", "Type to the agent in the terminal: Enter sends, Shift+Enter adds a line. The Chats button resumes a past conversation. Copy Prompt is only for manual handoff/context fallback.");
 	}
 
 	FText InitialSetupMessage()
@@ -164,6 +223,8 @@ namespace HyperAIStudio::QuickAction
 void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 {
 	OnOpenWorkbench = InArgs._OnOpenWorkbench;
+	OnNewAgentTab = InArgs._OnNewAgentTab;
+	TabIndex = FMath::Max(1, InArgs._TabIndex);
 	Service = MakeShared<FHyperAIStudioService>();
 	Status = Service->GetStatusSync();
 	LastMessage = HyperAIStudio::QuickAction::MessageForStatus(Status);
@@ -171,8 +232,10 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 	ResetTranscript();
 	SAssignNew(TerminalScrollBar, SScrollBar)
 		.Orientation(Orient_Vertical)
-		.AlwaysShowScrollbar(true)
-		.Thickness(FVector2D(6.0f, 6.0f));
+		.AlwaysShowScrollbar(false)
+		.Thickness(FVector2D(5.0f, 5.0f));
+	ChatSidebarCurve = FCurveSequence(0.0f, 0.2f, ECurveEaseFunction::CubicOut);
+	ActivitySidebarCurve = FCurveSequence(0.0f, 0.2f, ECurveEaseFunction::CubicOut);
 
 	ChildSlot
 	[
@@ -187,75 +250,118 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 				BuildHeader()
 			]
 			+ SVerticalBox::Slot()
-			.AutoHeight()
-			[
-				BuildStatusLine()
-			]
-			+ SVerticalBox::Slot()
-			.AutoHeight()
+			.FillHeight(1.0f)
 			.Padding(0.0f, 10.0f, 0.0f, 0.0f)
 			[
-				BuildAgentActions()
-			]
-			+ SVerticalBox::Slot()
-			.FillHeight(1.0f)
-			.Padding(0.0f, 8.0f, 0.0f, 0.0f)
-			[
-				SNew(SBorder)
-				.BorderImage(FHyperAIStudioStyle::Get().GetBrush("HyperAIStudio.Panel"))
-				.Padding(6.0f)
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
 				[
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot()
-					.FillHeight(1.0f)
+					// Width and opacity follow the curve; the clip hides content while it slides in or out.
+					SNew(SBox)
+					.WidthOverride_Lambda([this]() { return HyperAIStudio::QuickAction::ChatSidebarWidth * ChatSidebarCurve.GetLerp(); })
+					.Visibility_Lambda([this]() { return ChatSidebarCurve.GetLerp() > 0.0f ? EVisibility::Visible : EVisibility::Collapsed; })
+					.Clipping(EWidgetClipping::ClipToBounds)
 					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot()
-						.FillWidth(1.0f)
+						SNew(SBorder)
+						.BorderImage(FAppStyle::GetBrush(TEXT("NoBorder")))
+						.Padding(FMargin(0.0f, 0.0f, 10.0f, 0.0f))
+						.ColorAndOpacity_Lambda([this]() { return FLinearColor(1.0f, 1.0f, 1.0f, ChatSidebarCurve.GetLerp()); })
 						[
-							SAssignNew(TerminalHost, SBox)
-							[
-								BuildTerminalSessionWidget()
-							]
-						]
-						+ SHorizontalBox::Slot()
-						.AutoWidth()
-						[
-							TerminalScrollBar.ToSharedRef()
+							SAssignNew(ChatSidebar, SHyperAIStudioChatHistorySidebar)
+							.OnResumeChat(this, &SHyperAIStudioQuickActionWindow::ResumeChat)
+							.OnClose(this, &SHyperAIStudioQuickActionWindow::ToggleChatSidebar)
+							.OnNewChat_Lambda([this]()
+							{
+								ResumeAgentName.Reset();
+								ResumeSessionId.Reset();
+								ActiveChatSessionId.Reset();
+								LastMessage = LOCTEXT("NewChatStarted", "Starting a new chat.");
+								AddTranscriptLine(LastMessage.ToString());
+								QueueTerminalStartup(true, true);
+							})
+							.ActiveSessionId_Lambda([this]() { return ActiveChatSessionId; })
 						]
 					]
 				]
-			]
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(0.0f, 8.0f, 0.0f, 0.0f)
-			[
-				SAssignNew(PromptComposer, SHyperAIStudioPromptComposer)
-				.OnSubmit(this, &SHyperAIStudioQuickActionWindow::SubmitComposerText)
-				.OnEscape_Lambda([this]()
-				{
-					if (TerminalWidget.IsValid())
-					{
-						FSlateApplication::Get().SetKeyboardFocus(TerminalWidget, EFocusCause::SetDirectly);
-					}
-				})
-				.AgentName_Lambda([this]() { return ActiveTerminalAgentName.IsEmpty() ? GetSelectedAgentName() : ActiveTerminalAgentName; })
-				.IsEnabled_Lambda([this]() { return TerminalWidget.IsValid() && TerminalWidget->IsSessionRunning(); })
-			]
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(0.0f, 8.0f, 0.0f, 0.0f)
-			[
-				BuildSessionLog()
-			]
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(0.0f, 8.0f, 0.0f, 0.0f)
-			[
-				SNew(STextBlock)
-				.Text_Lambda([this]() { return LastMessage; })
-				.AutoWrapText(true)
-				.ColorAndOpacity(HyperAIStudio::QuickAction::MutedColor())
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.0f)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					[
+						BuildStatusLine()
+					]
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					[
+						BuildAgentActions()
+					]
+					+ SVerticalBox::Slot()
+					.FillHeight(1.0f)
+					.Padding(0.0f, 8.0f, 0.0f, 0.0f)
+					[
+						SNew(SBorder)
+						.BorderImage(FHyperAIStudioStyle::Get().GetBrush("HyperAIStudio.TerminalFrame"))
+						.BorderBackgroundColor_Lambda([]() { return FSlateColor(HyperAIStudio::QuickAction::TerminalBackgroundColor()); })
+						.Padding(FMargin(12.0f, 10.0f, 4.0f, 10.0f))
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot()
+							.FillWidth(1.0f)
+							[
+								SAssignNew(TerminalHost, SBox)
+								[
+									BuildTerminalSessionWidget()
+								]
+							]
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.Padding(4.0f, 0.0f, 0.0f, 0.0f)
+							[
+								TerminalScrollBar.ToSharedRef()
+							]
+						]
+					]
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					.Padding(0.0f, 8.0f, 0.0f, 0.0f)
+					[
+						BuildSessionLog()
+					]
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					.Padding(0.0f, 6.0f, 0.0f, 0.0f)
+					[
+						SNew(STextBlock)
+						.Text_Lambda([this]() { return LastMessage; })
+						.AutoWrapText(true)
+						.ColorAndOpacity(HyperAIStudio::QuickAction::MutedColor())
+					]
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					SNew(SBox)
+					.WidthOverride_Lambda([this]() { return HyperAIStudio::QuickAction::ChatSidebarWidth * ActivitySidebarCurve.GetLerp(); })
+					.Visibility_Lambda([this]() { return ActivitySidebarCurve.GetLerp() > 0.0f ? EVisibility::Visible : EVisibility::Collapsed; })
+					.Clipping(EWidgetClipping::ClipToBounds)
+					[
+						SNew(SBorder)
+						.BorderImage(FAppStyle::GetBrush(TEXT("NoBorder")))
+						.Padding(FMargin(10.0f, 0.0f, 0.0f, 0.0f))
+						.ColorAndOpacity_Lambda([this]() { return FLinearColor(1.0f, 1.0f, 1.0f, ActivitySidebarCurve.GetLerp()); })
+						[
+							SAssignNew(ActivitySidebar, SHyperAIStudioChatActivitySidebar)
+							.OnClose(this, &SHyperAIStudioQuickActionWindow::ToggleActivitySidebar)
+							.OnApprovalResolved_Lambda([this]()
+							{
+								Invalidate(EInvalidateWidgetReason::Paint);
+							})
+						]
+					]
+				]
 			]
 		]
 	];
@@ -268,6 +374,10 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 		ActiveTerminalAgentName.Reset();
 	}
 	RegisterActiveTimer(0.15f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunDeferredRefresh));
+	// The MCP pill is only honest if it is re-probed; the probe is async and idles when nothing changed.
+	RegisterActiveTimer(15.0f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunStatusHeartbeat));
+	// Reading the agent's screen is cheap; half a second is fast enough to notice a prompt, slow enough to be free.
+	RegisterActiveTimer(0.5f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunAgentStateHeartbeat));
 	RegisterActiveTimer(0.35f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunDeferredTerminalStartup));
 	RegisterActiveTimer(0.25f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunQueuedVisibleTerminalCommandPoll));
 }
@@ -306,6 +416,39 @@ void SHyperAIStudioQuickActionWindow::SelectAgentByName(const FString& AgentName
 			QueueTerminalStartup(true, true);
 			return;
 		}
+	}
+}
+
+void SHyperAIStudioQuickActionWindow::ResumeChat(const FHyperAIStudioChatSession& Session)
+{
+	if (HyperAIStudio::ChatHistory::BuildResumeArguments(Session.AgentName, Session.SessionId).IsEmpty())
+	{
+		return;
+	}
+	RefreshAgentOptions();
+	const bool bAgentUsable = AgentOptions.ContainsByPredicate([&Session](const TSharedPtr<FString>& Agent)
+	{
+		return Agent.IsValid() && Agent->Equals(Session.AgentName, ESearchCase::IgnoreCase);
+	});
+	if (!bAgentUsable)
+	{
+		LastMessage = FText::Format(LOCTEXT("ResumeAgentUnavailable", "{0} is not set up for HyperAI Chat, so that chat cannot be resumed here."),
+			FText::FromString(Session.AgentName));
+		AddTranscriptLine(LastMessage.ToString());
+		return;
+	}
+
+	ResumeAgentName = Session.AgentName;
+	ResumeSessionId = Session.SessionId;
+	LastMessage = FText::Format(LOCTEXT("ResumingChat", "Resuming {0} chat: {1}"), FText::FromString(Session.AgentName), FText::FromString(Session.Title));
+	AddTranscriptLine(LastMessage.ToString());
+	if (GetSelectedAgentName().Equals(Session.AgentName, ESearchCase::IgnoreCase))
+	{
+		QueueTerminalStartup(true, true);
+	}
+	else
+	{
+		SelectAgentByName(Session.AgentName);
 	}
 }
 
@@ -383,51 +526,6 @@ FReply SHyperAIStudioQuickActionWindow::OnPreviewKeyDown(const FGeometry& MyGeom
 	return SCompoundWidget::OnPreviewKeyDown(MyGeometry, InKeyEvent);
 }
 
-bool SHyperAIStudioQuickActionWindow::SubmitComposerText(const FString& Text)
-{
-	if (!TerminalWidget.IsValid() || !TerminalWidget->IsSessionRunning())
-	{
-		LastMessage = LOCTEXT("ComposerNoSession", "The embedded terminal is not running. Start the agent, then send again.");
-		return false;
-	}
-
-	const bool bMultiLine = Text.Contains(TEXT("\n"));
-	bool bSent = false;
-	if (HyperAIStudio::TerminalRawInput::IsAvailable())
-	{
-		// Without bracketed paste every newline is a real Enter, so a multi-line message would run line by line at a
-		// shell prompt. Agent TUIs switch bracketed paste on; its absence means no agent is listening.
-		if (bMultiLine && !HyperAIStudio::TerminalRawInput::IsBracketedPasteEnabled(*TerminalWidget))
-		{
-			LastMessage = LOCTEXT("ComposerNoAgentPrompt", "Nothing sent: no agent prompt is accepting multi-line input. Start the agent, or send a single line to the shell.");
-			AddTranscriptLine(LastMessage.ToString());
-			return false;
-		}
-		bSent = HyperAIStudio::TerminalRawInput::WriteText(*TerminalWidget, Text, true);
-	}
-	else if (!bMultiLine)
-	{
-		TerminalWidget->ExecuteCommand(Text);
-		bSent = true;
-	}
-
-	if (!bSent)
-	{
-		LastMessage = LOCTEXT("ComposerSendFailed", "Nothing sent: multi-line messages need raw terminal input, which is compiled out for this engine version.");
-		AddTranscriptLine(LastMessage.ToString());
-		return false;
-	}
-
-	FString Preview = Text.Left(80);
-	int32 NewlineIndex = INDEX_NONE;
-	if (Preview.FindChar(TEXT('\n'), NewlineIndex))
-	{
-		Preview.LeftInline(NewlineIndex);
-	}
-	AddTranscriptLine(FString::Printf(TEXT("You: %s%s"), *Preview, Preview.Len() < Text.Len() ? TEXT(" ...") : TEXT("")));
-	return true;
-}
-
 TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildSessionLog()
 {
 	return SNew(SExpandableArea)
@@ -447,9 +545,80 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildSessionLog()
 		];
 }
 
+void SHyperAIStudioQuickActionWindow::ToggleActivitySidebar()
+{
+	bActivitySidebarOpen = !bActivitySidebarOpen;
+	if (ActivitySidebarCurve.IsPlaying())
+	{
+		ActivitySidebarCurve.Reverse();
+	}
+	else if (bActivitySidebarOpen)
+	{
+		ActivitySidebarCurve.Play(AsShared());
+	}
+	else
+	{
+		ActivitySidebarCurve.PlayReverse(AsShared());
+	}
+}
+
+void SHyperAIStudioQuickActionWindow::ToggleChatSidebar()
+{
+	bChatSidebarOpen = !bChatSidebarOpen;
+	if (bChatSidebarOpen && ChatSidebar.IsValid())
+	{
+		ChatSidebar->Refresh();
+	}
+	if (ChatSidebarCurve.IsPlaying())
+	{
+		ChatSidebarCurve.Reverse();
+	}
+	else if (bChatSidebarOpen)
+	{
+		ChatSidebarCurve.Play(AsShared());
+	}
+	else
+	{
+		ChatSidebarCurve.PlayReverse(AsShared());
+	}
+}
+
 TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildHeader()
 {
 	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(0.0f, 0.0f, 8.0f, 0.0f)
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ToolTipText(LOCTEXT("ChatsToggleTooltip", "Show or hide this project's past agent chats."))
+			.OnClicked_Lambda([this]()
+			{
+				ToggleChatSidebar();
+				return FReply::Handled();
+			})
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				[
+					SNew(SImage)
+					.Image(FAppStyle::GetBrush(TEXT("Icons.Recent")))
+					.ColorAndOpacity(FSlateColor::UseForeground())
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(4.0f, 0.0f, 0.0f, 0.0f)
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("ChatsToggle", "Chats"))
+				]
+			]
+		]
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
 		.VAlign(VAlign_Center)
@@ -478,9 +647,87 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildHeader()
 			]
 		]
 		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(6.0f, 0.0f, 0.0f, 0.0f)
+		[
+			BuildAgentStateBadge()
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(6.0f, 0.0f, 0.0f, 0.0f)
+		[
+			BuildMcpStatusSelector()
+		]
+		+ SHorizontalBox::Slot()
 		.FillWidth(1.0f)
 		[
 			SNew(SBox)
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(0.0f, 0.0f, 6.0f, 0.0f)
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ToolTipText(LOCTEXT("ActivityToggleTooltip", "Plans waiting for your approval, work in progress, and what the agent changed."))
+			.OnClicked_Lambda([this]()
+			{
+				ToggleActivitySidebar();
+				return FReply::Handled();
+			})
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				[
+					SNew(SImage)
+					.Image(FAppStyle::GetBrush(TEXT("Icons.Visibility")))
+					.ColorAndOpacity_Lambda([]()
+					{
+						// Amber while something is waiting on the user.
+						return SHyperAIStudioChatActivitySidebar::GetPendingApprovalCount() > 0
+							? FSlateColor(FStyleColors::AccentYellow) : FSlateColor::UseForeground();
+					})
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(4.0f, 0.0f, 0.0f, 0.0f)
+				[
+					SNew(STextBlock)
+					.Text_Lambda([]()
+					{
+						const int32 Pending = SHyperAIStudioChatActivitySidebar::GetPendingApprovalCount();
+						return Pending > 0
+							? FText::Format(LOCTEXT("ActivityTogglePending", "Activity ({0})"), Pending)
+							: LOCTEXT("ActivityToggle", "Activity");
+					})
+				]
+			]
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(0.0f, 0.0f, 2.0f, 0.0f)
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ToolTipText(LOCTEXT("NewAgentTabTooltip", "Open another chat tab. Each tab runs its own agent; dock them side by side to watch both."))
+			.IsEnabled_Lambda([this]() { return OnNewAgentTab.IsBound(); })
+			.OnClicked_Lambda([this]()
+			{
+				OnNewAgentTab.ExecuteIfBound();
+				return FReply::Handled();
+			})
+			[
+				SNew(SImage)
+				.Image(FAppStyle::GetBrush(TEXT("Icons.Plus")))
+				.ColorAndOpacity(FSlateColor::UseForeground())
+			]
 		]
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
@@ -525,7 +772,7 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildSettingsMenu()
 		FUIAction(FExecuteAction::CreateSPLambda(this, [this]() { OnOpenWorkbenchClicked(); })));
 	Menu.AddMenuEntry(
 		LOCTEXT("ChatSettingsEntry", "Chat Settings..."),
-		LOCTEXT("ChatSettingsEntryTooltip", "Agent models, prompt history persistence and agent options."),
+		LOCTEXT("ChatSettingsEntryTooltip", "Agent models and agent options."),
 		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Edit"),
 		FUIAction(FExecuteAction::CreateLambda([]() { HyperAIStudio::QuickAction::OpenSettingsPage(GetDefault<UHyperAIStudioSettings>()); })));
 	Menu.AddMenuEntry(
@@ -571,15 +818,7 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildAgentActions()
 		.AutoWidth()
 		.VAlign(VAlign_Center)
 		[
-			SNew(SBorder)
-			.BorderImage(FHyperAIStudioStyle::Get().GetBrush("HyperAIStudio.Badge"))
-			.Padding(FMargin(8.0f, 2.0f))
-			.ToolTipText(LOCTEXT("ChatContextManualTooltip", "Context is manual by default. Use context-menu actions when you want selected Unreal context attached."))
-			[
-				SNew(STextBlock)
-				.Text(LOCTEXT("ChatContextManual", "Context: Manual"))
-				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
-			]
+			BuildContextSelector()
 		]
 		+ SHorizontalBox::Slot()
 		.FillWidth(1.0f)
@@ -618,6 +857,270 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildAgentActions()
 			})
 			.OnClicked(this, &SHyperAIStudioQuickActionWindow::OnToggleTerminalAgentClicked)
 		];
+}
+
+TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildContextSelector()
+{
+	return SNew(SComboButton)
+		.ToolTipText(LOCTEXT("ContextTooltip", "Put what you have selected in Unreal into the agent's prompt. You can also drag assets or actors onto this panel."))
+		.IsEnabled_Lambda([this]() { return TerminalWidget.IsValid() && TerminalWidget->IsSessionRunning(); })
+		.OnGetMenuContent(this, &SHyperAIStudioQuickActionWindow::BuildContextMenu)
+		.ButtonContent()
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("ContextButton", "Context"))
+		];
+}
+
+TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildContextMenu()
+{
+	TArray<FAssetData> SelectedAssets;
+	FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser")).Get().GetSelectedAssets(SelectedAssets);
+	TArray<FString> ActorPaths;
+	if (GEditor)
+	{
+		for (FSelectionIterator It(*GEditor->GetSelectedActors()); It; ++It)
+		{
+			if (const AActor* Actor = Cast<AActor>(*It))
+			{
+				ActorPaths.Add(Actor->GetPathName());
+			}
+		}
+	}
+
+	FMenuBuilder Menu(true, nullptr);
+	Menu.BeginSection(NAME_None, LOCTEXT("ContextMenuHeading", "Insert into the prompt"));
+	Menu.AddMenuEntry(
+		FText::Format(LOCTEXT("InsertAssets", "Selected assets ({0})"), SelectedAssets.Num()),
+		LOCTEXT("InsertAssetsTooltip", "Paste the object path of each selected Content Browser asset."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Package"),
+		FUIAction(
+			FExecuteAction::CreateSPLambda(this, [this, SelectedAssets]()
+			{
+				TArray<FString> Paths;
+				for (const FAssetData& Asset : SelectedAssets)
+				{
+					Paths.Add(Asset.GetSoftObjectPath().ToString());
+				}
+				InsertIntoAgentPrompt(FString::Join(Paths, TEXT("\n")), TEXT("selected assets"));
+			}),
+			FCanExecuteAction::CreateLambda([SelectedAssets]() { return SelectedAssets.Num() > 0; })));
+	Menu.AddMenuEntry(
+		FText::Format(LOCTEXT("InsertActors", "Selected actors ({0})"), ActorPaths.Num()),
+		LOCTEXT("InsertActorsTooltip", "Paste the path of each selected level actor."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Level"),
+		FUIAction(
+			FExecuteAction::CreateSPLambda(this, [this, ActorPaths]()
+			{
+				InsertIntoAgentPrompt(FString::Join(ActorPaths, TEXT("\n")), TEXT("selected actors"));
+			}),
+			FCanExecuteAction::CreateLambda([ActorPaths]() { return ActorPaths.Num() > 0; })));
+	Menu.AddMenuEntry(
+		LOCTEXT("InsertSummary", "Context summary"),
+		LOCTEXT("InsertSummaryTooltip", "Paste a sentence describing the current selection and map."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Info"),
+		FUIAction(FExecuteAction::CreateSPLambda(this, [this]()
+		{
+			if (Service.IsValid())
+			{
+				InsertIntoAgentPrompt(Service->GetCurrentContextSummary(), TEXT("context summary"));
+			}
+		})));
+	Menu.EndSection();
+	Menu.AddMenuSeparator();
+	Menu.AddWidget(
+		SNew(SBox)
+		.WidthOverride(240.0f)
+		.Padding(FMargin(12.0f, 4.0f))
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("ContextDropHint", "Dragging assets or actors onto this panel does the same thing."))
+			.AutoWrapText(true)
+			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+		],
+		FText::GetEmpty());
+	return Menu.MakeWidget();
+}
+
+bool SHyperAIStudioQuickActionWindow::InsertIntoAgentPrompt(const FString& Text, const FString& Label)
+{
+	const FString Trimmed = Text.TrimStartAndEnd();
+	if (Trimmed.IsEmpty() || !TerminalWidget.IsValid() || !TerminalWidget->IsSessionRunning())
+	{
+		return false;
+	}
+	// Bracketed paste is on only while an agent TUI owns the prompt; at a shell prompt this would run as commands.
+	if (!HyperAIStudio::TerminalRawInput::IsAvailable()
+		|| !HyperAIStudio::TerminalRawInput::IsBracketedPasteEnabled(*TerminalWidget))
+	{
+		LastMessage = LOCTEXT("ContextNoAgentPrompt", "Nothing inserted: no agent prompt is accepting input. Start the agent first.");
+		AddTranscriptLine(LastMessage.ToString());
+		return false;
+	}
+	// Never sends: the text lands in the prompt for the user to finish writing around.
+	if (!HyperAIStudio::TerminalRawInput::WriteText(*TerminalWidget, Trimmed, /*bAppendCarriageReturn=*/false))
+	{
+		LastMessage = LOCTEXT("ContextInsertFailed", "Nothing inserted: the terminal refused the paste.");
+		AddTranscriptLine(LastMessage.ToString());
+		return false;
+	}
+	LastMessage = FText::Format(LOCTEXT("ContextInserted", "Inserted {0} into the prompt."), FText::FromString(Label));
+	AddTranscriptLine(LastMessage.ToString());
+	FSlateApplication::Get().SetKeyboardFocus(TerminalWidget, EFocusCause::SetDirectly);
+	return true;
+}
+
+void SHyperAIStudioQuickActionWindow::OnDragEnter(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent)
+{
+	SCompoundWidget::OnDragEnter(MyGeometry, DragDropEvent);
+}
+
+FReply SHyperAIStudioQuickActionWindow::OnDragOver(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent)
+{
+	const bool bUnderstood = DragDropEvent.GetOperationAs<FAssetDragDropOp>().IsValid()
+		|| DragDropEvent.GetOperationAs<FActorDragDropOp>().IsValid();
+	return bUnderstood ? FReply::Handled() : FReply::Unhandled();
+}
+
+FReply SHyperAIStudioQuickActionWindow::OnDrop(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent)
+{
+	TArray<FString> Paths;
+	FString Label;
+	if (const TSharedPtr<FAssetDragDropOp> AssetDrop = DragDropEvent.GetOperationAs<FAssetDragDropOp>())
+	{
+		for (const FAssetData& Asset : AssetDrop->GetAssets())
+		{
+			Paths.Add(Asset.GetSoftObjectPath().ToString());
+		}
+		Label = TEXT("dropped assets");
+	}
+	else if (const TSharedPtr<FActorDragDropOp> ActorDrop = DragDropEvent.GetOperationAs<FActorDragDropOp>())
+	{
+		for (const TWeakObjectPtr<AActor>& Actor : ActorDrop->Actors)
+		{
+			if (Actor.IsValid())
+			{
+				Paths.Add(Actor->GetPathName());
+			}
+		}
+		Label = TEXT("dropped actors");
+	}
+	if (Paths.IsEmpty())
+	{
+		return FReply::Unhandled();
+	}
+	InsertIntoAgentPrompt(FString::Join(Paths, TEXT("\n")), Label);
+	return FReply::Handled();
+}
+
+TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildMcpStatusSelector()
+{
+	return SNew(SComboButton)
+		.ComboButtonStyle(FAppStyle::Get(), "SimpleComboButton")
+		.HasDownArrow(false)
+		.ToolTipText_Lambda([this]()
+		{
+			return FText::Format(
+				LOCTEXT("McpStatusTooltip", "Unreal MCP at {0}\nServer running: {1}\nPort listening: {2}\nTool list reachable: {3}\nRegistered tools: {4}"),
+				FText::FromString(Status.Endpoint.IsEmpty() ? FString(TEXT("<not configured>")) : Status.Endpoint),
+				Status.bServerRunning ? LOCTEXT("Yes", "yes") : LOCTEXT("No", "no"),
+				Status.bPortListening ? LOCTEXT("Yes", "yes") : LOCTEXT("No", "no"),
+				Status.bToolsListReachable ? LOCTEXT("Yes", "yes") : LOCTEXT("No", "no"),
+				Status.RegisteredToolCount);
+		})
+		.OnGetMenuContent(this, &SHyperAIStudioQuickActionWindow::BuildMcpStatusMenu)
+		.ButtonContent()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			[
+				SNew(SImage)
+				.Image(FAppStyle::GetBrush(TEXT("Icons.BulletPoint")))
+				.ColorAndOpacity(this, &SHyperAIStudioQuickActionWindow::GetMcpStatusColor)
+			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(3.0f, 0.0f, 0.0f, 0.0f)
+			[
+				SNew(STextBlock)
+				.Text(this, &SHyperAIStudioQuickActionWindow::GetMcpStatusText)
+			]
+		];
+}
+
+TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildMcpStatusMenu()
+{
+	FMenuBuilder Menu(true, nullptr);
+	Menu.BeginSection(NAME_None, LOCTEXT("McpMenuHeading", "Unreal MCP"));
+	Menu.AddMenuEntry(
+		LOCTEXT("McpReconnect", "Reconnect"),
+		LOCTEXT("McpReconnectTooltip", "Restart the Unreal MCP server, then re-probe it. Running agents reconnect on their next call."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Refresh"),
+		FUIAction(FExecuteAction::CreateSPLambda(this, [this]()
+		{
+			if (!Service.IsValid())
+			{
+				return;
+			}
+			FText Message;
+			const bool bRestarted = Service->RestartUnrealMCP(Message);
+			LastMessage = Message.IsEmpty()
+				? (bRestarted ? LOCTEXT("McpRestarted", "Unreal MCP restarted.") : LOCTEXT("McpRestartFailed", "Unreal MCP did not restart."))
+				: Message;
+			AddTranscriptLine(LastMessage.ToString());
+			RefreshStatus();
+		})));
+	Menu.AddMenuEntry(
+		LOCTEXT("McpReprobe", "Re-probe"),
+		LOCTEXT("McpReprobeTooltip", "Check the endpoint again without restarting anything."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Search"),
+		FUIAction(FExecuteAction::CreateSPLambda(this, [this]() { RefreshStatus(); })));
+	Menu.AddMenuEntry(
+		LOCTEXT("McpCopyEndpoint", "Copy endpoint"),
+		LOCTEXT("McpCopyEndpointTooltip", "Copy the MCP endpoint URL to the clipboard."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Duplicate"),
+		FUIAction(
+			FExecuteAction::CreateSPLambda(this, [this]() { FPlatformApplicationMisc::ClipboardCopy(*Status.Endpoint); }),
+			FCanExecuteAction::CreateLambda([this]() { return !Status.Endpoint.IsEmpty(); })));
+	Menu.EndSection();
+	return Menu.MakeWidget();
+}
+
+FText SHyperAIStudioQuickActionWindow::GetMcpStatusText() const
+{
+	if (!Status.bUnrealMCPModuleAvailable)
+	{
+		return LOCTEXT("McpMissing", "MCP: unavailable");
+	}
+	if (!Status.bServerRunning)
+	{
+		return LOCTEXT("McpStopped", "MCP: stopped");
+	}
+	if (!Status.bPortListening)
+	{
+		return FText::Format(LOCTEXT("McpNotListening", "MCP: port {0} closed"), FText::AsNumber(Status.ActivePort, &FNumberFormattingOptions::DefaultNoGrouping()));
+	}
+	if (!Status.bToolsListReachable)
+	{
+		return LOCTEXT("McpUnreachable", "MCP: no tool list");
+	}
+	return FText::Format(LOCTEXT("McpReady", "MCP: {0} tools"), Status.RegisteredToolCount);
+}
+
+FSlateColor SHyperAIStudioQuickActionWindow::GetMcpStatusColor() const
+{
+	if (!Status.bServerRunning || !Status.bUnrealMCPModuleAvailable)
+	{
+		return FSlateColor(FStyleColors::AccentRed);
+	}
+	if (!Status.bPortListening || !Status.bToolsListReachable)
+	{
+		return FSlateColor(FStyleColors::AccentYellow);
+	}
+	return FSlateColor(FStyleColors::AccentGreen);
 }
 
 TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildModelSelector()
@@ -946,7 +1449,7 @@ void SHyperAIStudioQuickActionWindow::ResetTranscript()
 	}
 
 	AddTranscriptLine(GetSelectedAgentStatusLine());
-	AddTranscriptLine(TEXT("Context: Manual unless opened from a Content Browser, level selection, or Blueprint context action."));
+	AddTranscriptLine(TEXT("Context: manual. Use the Context button, or drag assets and actors onto this panel, to put paths in the prompt."));
 	AddTranscriptLine(FString::Printf(TEXT("Last action: %s"), *LastMessage.ToString()));
 }
 
@@ -971,6 +1474,114 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunDeferredRefresh(doubl
 {
 	RefreshStatus();
 	return EActiveTimerReturnType::Stop;
+}
+
+void SHyperAIStudioQuickActionWindow::SetOwnerTab(const TSharedRef<SDockTab>& InTab)
+{
+	OwnerTab = InTab;
+	InTab->SetLabel(GetTabLabel());
+}
+
+FText SHyperAIStudioQuickActionWindow::GetTabLabel() const
+{
+	const FText Base = TabIndex <= 1
+		? LOCTEXT("TabLabelFirst", "HyperAI Chat")
+		: FText::Format(LOCTEXT("TabLabelNumbered", "HyperAI Chat {0}"), TabIndex);
+	// The tab label is what you read when the panel is not on screen, so the state belongs in it.
+	if (AgentState.State == EHyperAIStudioAgentState::Stopped || AgentState.Label.IsEmpty())
+	{
+		return Base;
+	}
+	return FText::Format(LOCTEXT("TabLabelWithState", "{0} - {1}"), Base, AgentState.Label);
+}
+
+EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunAgentStateHeartbeat(double CurrentTime, float DeltaTime)
+{
+	FHyperAIStudioAgentStateInputs Inputs;
+	Inputs.bSessionRunning = TerminalWidget.IsValid() && TerminalWidget->IsSessionRunning();
+	Inputs.bStartupPending = Inputs.bSessionRunning && !bTerminalStartupSent && !bTerminalStartupPaused;
+	if (Inputs.bSessionRunning && HyperAIStudio::TerminalRawInput::IsAvailable())
+	{
+		Inputs.Tail = HyperAIStudio::TerminalRawInput::ReadVisibleTail(
+			*TerminalWidget, FHyperAIStudioAgentStateEvaluator::TailRows);
+		const double LastOutput = HyperAIStudio::TerminalRawInput::GetLastOutputTime(*TerminalWidget);
+		Inputs.SecondsSinceOutput = LastOutput > 0.0 ? FPlatformTime::Seconds() - LastOutput : -1.0;
+	}
+
+	const FHyperAIStudioAgentStateSnapshot Previous = AgentState;
+	AgentState = FHyperAIStudioAgentStateEvaluator::Evaluate(Inputs);
+	if (AgentState.State == Previous.State)
+	{
+		return EActiveTimerReturnType::Continue;
+	}
+
+	if (const TSharedPtr<SDockTab> Tab = OwnerTab.Pin())
+	{
+		Tab->SetLabel(GetTabLabel());
+		// Flash the tab only on the way into a state that needs a person, so a background tab still gets noticed.
+		if (FHyperAIStudioAgentStateEvaluator::WantsAttention(AgentState.State)
+			&& !FHyperAIStudioAgentStateEvaluator::WantsAttention(Previous.State))
+		{
+			FGlobalTabmanager::Get()->DrawAttention(Tab.ToSharedRef());
+		}
+	}
+	AddTranscriptLine(FString::Printf(TEXT("Agent is %s%s"),
+		FHyperAIStudioAgentStateEvaluator::LexToString(AgentState.State),
+		AgentState.Evidence.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" (%s)"), *AgentState.Evidence)));
+	Invalidate(EInvalidateWidgetReason::Paint);
+	return EActiveTimerReturnType::Continue;
+}
+
+TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildAgentStateBadge()
+{
+	return SNew(SHorizontalBox)
+		.ToolTipText_Lambda([this]()
+		{
+			return AgentState.Evidence.IsEmpty()
+				? FText::Format(LOCTEXT("AgentStateTooltip", "This tab's agent is {0}."), AgentState.Label)
+				: FText::Format(LOCTEXT("AgentStateTooltipEvidence", "This tab's agent is {0}.\nFrom its screen: {1}"),
+					AgentState.Label, FText::FromString(AgentState.Evidence));
+		})
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		[
+			SNew(SImage)
+			.Image(FAppStyle::GetBrush(TEXT("Icons.BulletPoint")))
+			.ColorAndOpacity(this, &SHyperAIStudioQuickActionWindow::GetAgentStateColor)
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(3.0f, 0.0f, 0.0f, 0.0f)
+		[
+			SNew(STextBlock)
+			.Text_Lambda([this]() { return AgentState.Label; })
+			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+		];
+}
+
+FSlateColor SHyperAIStudioQuickActionWindow::GetAgentStateColor() const
+{
+	switch (AgentState.State)
+	{
+	case EHyperAIStudioAgentState::NeedsInput:
+	case EHyperAIStudioAgentState::PlanReview: return FSlateColor(FStyleColors::AccentYellow);
+	case EHyperAIStudioAgentState::Blocked: return FSlateColor(FStyleColors::AccentRed);
+	case EHyperAIStudioAgentState::Working: return FSlateColor(FStyleColors::AccentBlue);
+	case EHyperAIStudioAgentState::Idle: return FSlateColor(FStyleColors::AccentGreen);
+	default: return FSlateColor::UseSubduedForeground();
+	}
+}
+
+EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunStatusHeartbeat(double CurrentTime, float DeltaTime)
+{
+	// Only re-probe when the previous one finished, so a slow endpoint cannot queue probes on top of each other.
+	if (!bRefreshing && !Status.bProbeInProgress)
+	{
+		RefreshStatus();
+	}
+	return EActiveTimerReturnType::Continue;
 }
 
 EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunDeferredTerminalStartup(double CurrentTime, float DeltaTime)
@@ -1007,6 +1618,9 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunDeferredTerminalStart
 		}
 	}
 	TerminalWidget->ExecuteCommand(BuildTerminalBootstrapCommand(AgentName));
+	ActiveChatSessionId = ResumeAgentName.Equals(AgentName, ESearchCase::IgnoreCase) ? ResumeSessionId : FString();
+	ResumeAgentName.Reset();
+	ResumeSessionId.Reset();
 	bTerminalStartupSent = true;
 	ActiveTerminalAgentName = AgentName;
 	Invalidate(EInvalidateWidgetReason::Paint);
@@ -1098,6 +1712,13 @@ FString SHyperAIStudioQuickActionWindow::GetTerminalLaunchCommandForAgent(const 
 	if (const HyperAIStudio::QuickAction::FAgentRoute* Route = HyperAIStudio::QuickAction::FindBuiltInRoute(AgentName))
 	{
 		FString LaunchCommand = FHyperAIStudioService::GetAgentTerminalLaunchCommand(Route->Name);
+		const FString ResumeArguments = ResumeAgentName.Equals(Route->Name, ESearchCase::IgnoreCase)
+			? HyperAIStudio::ChatHistory::BuildResumeArguments(Route->Name, ResumeSessionId)
+			: FString();
+		if (!LaunchCommand.IsEmpty() && !ResumeArguments.IsEmpty())
+		{
+			LaunchCommand += TEXT(" ") + ResumeArguments;
+		}
 		const FHyperAIStudioAgentModelRoute* ModelRoute = GetDefault<UHyperAIStudioSettings>()->FindAgentModelRoute(Route->Name);
 		FString ModelArgument;
 		FString ModelError;
@@ -1230,7 +1851,7 @@ FText SHyperAIStudioQuickActionWindow::GetNextActionTextForStatus(const FHyperAI
 {
 	if (InStatus.IsReady())
 	{
-		return LOCTEXT("ReadyNextAction", "Next useful action: message the embedded agent terminal from the box below. Copy Prompt is only for manual handoff fallback.");
+		return LOCTEXT("ReadyNextAction", "Next useful action: type to the embedded agent terminal. Copy Prompt is only for manual handoff fallback.");
 	}
 	if (bIsRefreshing || InStatus.bProbeInProgress)
 	{

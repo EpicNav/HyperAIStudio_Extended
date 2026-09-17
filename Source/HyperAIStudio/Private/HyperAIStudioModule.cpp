@@ -32,6 +32,10 @@
 #include "HyperAIStudioContextSearchToolsets.h"
 #include "HyperAIStudioDiagnosticsRegistration.h"
 #include "HyperAIStudioExtensionRuntime.h"
+#include "HyperAIStudioAgentActivity.h"
+#include "HyperAIStudioApprovalGate.h"
+#include "HyperAIStudioAsyncJobHost.h"
+#include "HyperAIStudioFoundationProbe.h"
 #include "HyperAIStudioNativeReadToolset.h"
 #include "HyperAIStudioPIEPlaytestToolset.h"
 #include "HyperAIStudioPlanExecuteToolset.h"
@@ -77,6 +81,18 @@ namespace
 {
 	const FName HyperAIStudioTabName(TEXT("HyperAIStudio"));
 	const FName HyperAIStudioChatTabName(TEXT("HyperAIStudioChat"));
+
+	/**
+	 * Extra chat tabs, so several agents can work at once and be docked side by side. Each is its own
+	 * nomad tab with its own panel, terminal and agent; they share the one Unreal MCP endpoint, which
+	 * serialises their tool calls, and the one-at-a-time mutation lane.
+	 */
+	constexpr int32 MaxChatTabs = 4;
+
+	FName ChatTabNameForIndex(const int32 Index)
+	{
+		return Index <= 1 ? HyperAIStudioChatTabName : FName(*FString::Printf(TEXT("HyperAIStudioChat%d"), Index));
+	}
 
 	FString NormalizeMCPServerSelector(const FString& RawValue)
 	{
@@ -537,6 +553,9 @@ public:
 			DiagnosticsRegistration->Startup();
 			PIEPlaytestRegistration = MakeUnique<FHyperAIStudioPIEPlaytestRegistration>();
 			PIEPlaytestRegistration->Startup();
+			// Every optional pack's typed mutation requires this probe to be live and fresh.
+			FoundationProbe = MakeUnique<FHyperAIStudioFoundationProbe>();
+			FoundationProbe->Startup();
 			LoadAvailableCapabilityModules();
 		}
 #if WITH_DEV_AUTOMATION_TESTS
@@ -551,13 +570,18 @@ public:
 			.SetIcon(FSlateIcon(FHyperAIStudioStyle::GetStyleSetName(), "HyperAIStudio.TabIcon"))
 			.SetMenuType(ETabSpawnerMenuType::Hidden);
 
-		FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
-			HyperAIStudioChatTabName,
-			FOnSpawnTab::CreateRaw(this, &FHyperAIStudioModule::SpawnChatTab))
-			.SetDisplayName(LOCTEXT("ChatTabTitle", "HyperAI Chat"))
-			.SetTooltipText(LOCTEXT("ChatTabTooltip", "Open the lightweight HyperAI chat panel for Unreal context handoff."))
-			.SetIcon(FSlateIcon(FHyperAIStudioStyle::GetStyleSetName(), "HyperAIStudio.TabIcon"))
-			.SetMenuType(ETabSpawnerMenuType::Hidden);
+		for (int32 Index = 1; Index <= MaxChatTabs; ++Index)
+		{
+			FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
+				ChatTabNameForIndex(Index),
+				FOnSpawnTab::CreateRaw(this, &FHyperAIStudioModule::SpawnChatTabAtIndex, Index))
+				.SetDisplayName(Index <= 1
+					? LOCTEXT("ChatTabTitle", "HyperAI Chat")
+					: FText::Format(LOCTEXT("ChatTabTitleNumbered", "HyperAI Chat {0}"), Index))
+				.SetTooltipText(LOCTEXT("ChatTabTooltip", "Open the lightweight HyperAI chat panel for Unreal context handoff."))
+				.SetIcon(FSlateIcon(FHyperAIStudioStyle::GetStyleSetName(), "HyperAIStudio.TabIcon"))
+				.SetMenuType(ETabSpawnerMenuType::Hidden);
+		}
 
 		UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FHyperAIStudioModule::RegisterMenus));
 
@@ -825,7 +849,18 @@ public:
 		}
 
 		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(HyperAIStudioTabName);
-		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(HyperAIStudioChatTabName);
+		for (int32 Index = 1; Index <= MaxChatTabs; ++Index)
+		{
+			FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(ChatTabNameForIndex(Index));
+		}
+		// Jobs hold pack callbacks and pending approvals hold prepared plans; neither may outlive the host.
+		FHyperAIStudioAsyncJobHost::Shutdown();
+		FHyperAIStudioApprovalGate::Clear();
+		if (FoundationProbe)
+		{
+			FoundationProbe->Shutdown();
+			FoundationProbe.Reset();
+		}
 		HyperAIStudio::TrustedExecution::Private::ShutdownCore();
 		// Last: the spawners unregistered above held raw brush pointers into the style set.
 		FHyperAIStudioStyle::Unregister();
@@ -922,6 +957,14 @@ private:
 				{TEXT("hyper_niagara_inspect"), TEXT("hyper_niagara_apply_plan"),
 					TEXT("hyper_niagara_validate")},
 				{TEXT("Niagara")}
+			},
+			{
+				TEXT("HyperAIStudioTextureGraph"),
+				TEXT("texture_graph"),
+				TEXT("cohort.source.hyperaistudiotexturegraphtoolset.v1"),
+				{TEXT("hyper_texture_graph_inspect"), TEXT("hyper_texture_graph_apply_plan"),
+					TEXT("hyper_texture_graph_validate")},
+				{TEXT("TextureGraph")}
 			},
 			{
 				TEXT("HyperAIStudioPCG"),
@@ -1039,6 +1082,25 @@ private:
 		};
 		const bool bAllowSourceCandidate =
 			FHyperAIStudioExtensionRuntime::AreSourceCandidateToolsEnabled();
+		int32 LoadedCount = 0;
+		TArray<FString> SkippedSummaries;
+		// A module whose tool list disagrees with the generated catalog used to disappear with a Verbose line.
+		// Every skip now says which module, why, and what to do about it.
+		auto ReportSkip = [&SkippedSummaries](const FOptionalCapabilityModule& Module, const FString& Reason, const FString& Remedy)
+		{
+			SkippedSummaries.Add(Module.ModuleName.ToString());
+			UE_LOG(LogHyperAIStudio, Warning,
+				TEXT("Optional capability module %s was not loaded: %s %s Its tools (%s) are unavailable to agents."),
+				*Module.ModuleName.ToString(), *Reason, *Remedy, *FString::Join(Module.ToolNames, TEXT(", ")));
+			FHyperAIStudioActivityEntry Entry;
+			Entry.Kind = EHyperAIStudioActivityKind::Failed;
+			Entry.PackId = Module.PackId;
+			Entry.ToolName = Module.ModuleName.ToString();
+			Entry.StatusCode = TEXT("module_not_loaded");
+			Entry.Detail = Reason + TEXT(" ") + Remedy;
+			FHyperAIStudioAgentActivityLog::Record(MoveTemp(Entry));
+		};
+
 		for (const FOptionalCapabilityModule& Module : Modules)
 		{
 			FHyperAIStudioExtensionCohortAdmission Admission;
@@ -1046,6 +1108,11 @@ private:
 					Module.PackId, Module.CohortId, Module.ToolNames, Admission)
 				|| !Admission.bExactCohortMatch)
 			{
+				const FString Reason = FHyperAIStudioExtensionRuntime::DescribeExactGeneratedCohortMismatch(
+					Module.PackId, Module.CohortId, Module.ToolNames);
+				ReportSkip(Module,
+					Reason.IsEmpty() ? TEXT("the generated catalog refused its exact cohort.") : Reason,
+					TEXT("Regenerate HyperAIStudioCapabilityPackCatalog.generated.inl so the catalog and the module agree."));
 				continue;
 			}
 			const bool bMayLoad = Admission.State == EHyperAIStudioExtensionAdmissionState::Admitted
@@ -1053,32 +1120,43 @@ private:
 					&& bAllowSourceCandidate);
 			if (!bMayLoad)
 			{
+				// A deliberate setting, not a defect: say so plainly and name the setting that changes it.
+				UE_LOG(LogHyperAIStudio, Display,
+					TEXT("Optional capability module %s is a source candidate and stays unloaded while Native Tool Channel is not Preview."),
+					*Module.ModuleName.ToString());
+				SkippedSummaries.Add(Module.ModuleName.ToString());
 				continue;
 			}
-			bool bPrerequisitesReady = true;
+			TArray<FString> MissingPlugins;
 			for (const FString& PluginName : Module.RequiredPlugins)
 			{
 				const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(PluginName);
 				if (!Plugin.IsValid() || !Plugin->IsEnabled())
 				{
-					bPrerequisitesReady = false;
-					break;
+					MissingPlugins.Add(PluginName);
 				}
 			}
-			if (!bPrerequisitesReady)
+			if (!MissingPlugins.IsEmpty())
 			{
 				UE_LOG(LogHyperAIStudio, Display,
-					TEXT("Optional capability module %s remains unavailable until its project plugin prerequisites are enabled."),
-					*Module.ModuleName.ToString());
+					TEXT("Optional capability module %s remains unavailable until these project plugins are enabled: %s."),
+					*Module.ModuleName.ToString(), *FString::Join(MissingPlugins, TEXT(", ")));
+				SkippedSummaries.Add(Module.ModuleName.ToString());
 				continue;
 			}
 			if (!FModuleManager::Get().LoadModule(Module.ModuleName))
 			{
-				UE_LOG(LogHyperAIStudio, Error,
-					TEXT("Admission-authorized optional capability module %s failed to load."),
-					*Module.ModuleName.ToString());
+				ReportSkip(Module, TEXT("the module is admitted but failed to load."),
+					TEXT("Check the log above for its own startup error, and that the plugin was built."));
+				continue;
 			}
+			++LoadedCount;
 		}
+
+		UE_LOG(LogHyperAIStudio, Display,
+			TEXT("Optional capability modules: %d loaded, %d skipped%s"),
+			LoadedCount, SkippedSummaries.Num(),
+			SkippedSummaries.IsEmpty() ? TEXT(".") : *FString::Printf(TEXT(" (%s)."), *FString::Join(SkippedSummaries, TEXT(", "))));
 	}
 
 	void BeginEnginePreExit()
@@ -1125,12 +1203,14 @@ private:
 			];
 	}
 
-	TSharedRef<SDockTab> CreateChatDockTab()
+	TSharedRef<SDockTab> CreateChatDockTab(const int32 TabIndex = 1)
 	{
 		TSharedPtr<SHyperAIStudioQuickActionWindow> ChatWidget;
 		TSharedRef<SDockTab> ChatTab = SNew(SDockTab)
 			.TabRole(ETabRole::NomadTab)
-			.Label(LOCTEXT("DockedChatTabLabel", "HyperAI Chat"))
+			.Label(TabIndex <= 1
+				? LOCTEXT("DockedChatTabLabel", "HyperAI Chat")
+				: FText::Format(LOCTEXT("DockedChatTabLabelNumbered", "HyperAI Chat {0}"), TabIndex))
 			[
 				SNew(SBox)
 				.MinDesiredWidth(420.0f)
@@ -1138,9 +1218,16 @@ private:
 				[
 					SAssignNew(ChatWidget, SHyperAIStudioQuickActionWindow)
 					.OnOpenWorkbench(FSimpleDelegate::CreateRaw(this, &FHyperAIStudioModule::OpenTab))
+					.OnNewAgentTab(FSimpleDelegate::CreateRaw(this, &FHyperAIStudioModule::OpenNextChatTab))
+					.TabIndex(TabIndex)
 				]
 			];
 		ChatTab->SetOnTabClosed(SDockTab::FOnTabClosedCallback::CreateRaw(this, &FHyperAIStudioModule::OnChatTabClosed));
+		if (ChatWidget.IsValid())
+		{
+			ChatWidget->SetOwnerTab(ChatTab);
+		}
+		// Enqueued visible commands target the most recent chat panel; each tab still owns its own terminal.
 		ActiveChatTab = ChatTab;
 		ActiveChatWidget = ChatWidget;
 		return ChatTab;
@@ -1149,6 +1236,27 @@ private:
 	TSharedRef<SDockTab> SpawnChatTab(const FSpawnTabArgs& Args)
 	{
 		return CreateChatDockTab();
+	}
+
+	TSharedRef<SDockTab> SpawnChatTabAtIndex(const FSpawnTabArgs& Args, const int32 TabIndex)
+	{
+		return CreateChatDockTab(TabIndex);
+	}
+
+	/** Opens the lowest-numbered chat tab that is not already live, so each agent gets its own. */
+	void OpenNextChatTab()
+	{
+		for (int32 Index = 1; Index <= MaxChatTabs; ++Index)
+		{
+			const FName TabName = ChatTabNameForIndex(Index);
+			if (!FGlobalTabmanager::Get()->FindExistingLiveTab(FTabId(TabName)).IsValid())
+			{
+				FGlobalTabmanager::Get()->TryInvokeTab(TabName);
+				return;
+			}
+		}
+		UE_LOG(LogHyperAIStudio, Display,
+			TEXT("All %d HyperAI chat tabs are already open; close one to start another agent."), MaxChatTabs);
 	}
 
 	void RegisterMenus()
@@ -6030,6 +6138,7 @@ private:
 	TUniquePtr<FHyperAIStudioBlueprintWorkflowRegistration> BlueprintWorkflowRegistration;
 	TUniquePtr<FHyperAIStudioDiagnosticsRegistration> DiagnosticsRegistration;
 	TUniquePtr<FHyperAIStudioPIEPlaytestRegistration> PIEPlaytestRegistration;
+	TUniquePtr<FHyperAIStudioFoundationProbe> FoundationProbe;
 	FDelegateHandle EnginePreExitHandle;
 	TUniquePtr<FAutoConsoleCommand> CommandSetUp;
 	TUniquePtr<FAutoConsoleCommand> CommandGenerateFiles;
