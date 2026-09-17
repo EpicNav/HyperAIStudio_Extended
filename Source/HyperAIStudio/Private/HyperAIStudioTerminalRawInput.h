@@ -44,4 +44,13 @@ namespace HyperAIStudio::TerminalRawInput
 
 	/** Builds a paste payload using the terminal's live bracketed-paste mode and writes it in one call. */
 	bool WriteText(STerminal& Terminal, const FString& Text, bool bAppendCarriageReturn);
+
+	/**
+	 * The last MaxRows rows of the visible screen as plain text, trailing blanks trimmed.
+	 * Read-only, and the only way to tell what an agent TUI is showing: it draws a screen, not a stream.
+	 */
+	FString ReadVisibleTail(const STerminal& Terminal, int32 MaxRows);
+
+	/** Engine time of the terminal's last output, or 0 when it has produced none. */
+	double GetLastOutputTime(const STerminal& Terminal);
 }

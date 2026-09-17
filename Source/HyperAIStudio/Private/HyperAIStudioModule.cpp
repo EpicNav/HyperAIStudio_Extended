@@ -81,6 +81,18 @@ namespace
 	const FName HyperAIStudioTabName(TEXT("HyperAIStudio"));
 	const FName HyperAIStudioChatTabName(TEXT("HyperAIStudioChat"));
 
+	/**
+	 * Extra chat tabs, so several agents can work at once and be docked side by side. Each is its own
+	 * nomad tab with its own panel, terminal and agent; they share the one Unreal MCP endpoint, which
+	 * serialises their tool calls, and the one-at-a-time mutation lane.
+	 */
+	constexpr int32 MaxChatTabs = 4;
+
+	FName ChatTabNameForIndex(const int32 Index)
+	{
+		return Index <= 1 ? HyperAIStudioChatTabName : FName(*FString::Printf(TEXT("HyperAIStudioChat%d"), Index));
+	}
+
 	FString NormalizeMCPServerSelector(const FString& RawValue)
 	{
 		FString Result;
@@ -557,13 +569,18 @@ public:
 			.SetIcon(FSlateIcon(FHyperAIStudioStyle::GetStyleSetName(), "HyperAIStudio.TabIcon"))
 			.SetMenuType(ETabSpawnerMenuType::Hidden);
 
-		FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
-			HyperAIStudioChatTabName,
-			FOnSpawnTab::CreateRaw(this, &FHyperAIStudioModule::SpawnChatTab))
-			.SetDisplayName(LOCTEXT("ChatTabTitle", "HyperAI Chat"))
-			.SetTooltipText(LOCTEXT("ChatTabTooltip", "Open the lightweight HyperAI chat panel for Unreal context handoff."))
-			.SetIcon(FSlateIcon(FHyperAIStudioStyle::GetStyleSetName(), "HyperAIStudio.TabIcon"))
-			.SetMenuType(ETabSpawnerMenuType::Hidden);
+		for (int32 Index = 1; Index <= MaxChatTabs; ++Index)
+		{
+			FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
+				ChatTabNameForIndex(Index),
+				FOnSpawnTab::CreateRaw(this, &FHyperAIStudioModule::SpawnChatTabAtIndex, Index))
+				.SetDisplayName(Index <= 1
+					? LOCTEXT("ChatTabTitle", "HyperAI Chat")
+					: FText::Format(LOCTEXT("ChatTabTitleNumbered", "HyperAI Chat {0}"), Index))
+				.SetTooltipText(LOCTEXT("ChatTabTooltip", "Open the lightweight HyperAI chat panel for Unreal context handoff."))
+				.SetIcon(FSlateIcon(FHyperAIStudioStyle::GetStyleSetName(), "HyperAIStudio.TabIcon"))
+				.SetMenuType(ETabSpawnerMenuType::Hidden);
+		}
 
 		UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FHyperAIStudioModule::RegisterMenus));
 
@@ -831,7 +848,10 @@ public:
 		}
 
 		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(HyperAIStudioTabName);
-		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(HyperAIStudioChatTabName);
+		for (int32 Index = 1; Index <= MaxChatTabs; ++Index)
+		{
+			FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(ChatTabNameForIndex(Index));
+		}
 		// Jobs hold pack callbacks and pending approvals hold prepared plans; neither may outlive the host.
 		FHyperAIStudioAsyncJobHost::Shutdown();
 		FHyperAIStudioApprovalGate::Clear();
@@ -1147,12 +1167,14 @@ private:
 			];
 	}
 
-	TSharedRef<SDockTab> CreateChatDockTab()
+	TSharedRef<SDockTab> CreateChatDockTab(const int32 TabIndex = 1)
 	{
 		TSharedPtr<SHyperAIStudioQuickActionWindow> ChatWidget;
 		TSharedRef<SDockTab> ChatTab = SNew(SDockTab)
 			.TabRole(ETabRole::NomadTab)
-			.Label(LOCTEXT("DockedChatTabLabel", "HyperAI Chat"))
+			.Label(TabIndex <= 1
+				? LOCTEXT("DockedChatTabLabel", "HyperAI Chat")
+				: FText::Format(LOCTEXT("DockedChatTabLabelNumbered", "HyperAI Chat {0}"), TabIndex))
 			[
 				SNew(SBox)
 				.MinDesiredWidth(420.0f)
@@ -1160,9 +1182,16 @@ private:
 				[
 					SAssignNew(ChatWidget, SHyperAIStudioQuickActionWindow)
 					.OnOpenWorkbench(FSimpleDelegate::CreateRaw(this, &FHyperAIStudioModule::OpenTab))
+					.OnNewAgentTab(FSimpleDelegate::CreateRaw(this, &FHyperAIStudioModule::OpenNextChatTab))
+					.TabIndex(TabIndex)
 				]
 			];
 		ChatTab->SetOnTabClosed(SDockTab::FOnTabClosedCallback::CreateRaw(this, &FHyperAIStudioModule::OnChatTabClosed));
+		if (ChatWidget.IsValid())
+		{
+			ChatWidget->SetOwnerTab(ChatTab);
+		}
+		// Enqueued visible commands target the most recent chat panel; each tab still owns its own terminal.
 		ActiveChatTab = ChatTab;
 		ActiveChatWidget = ChatWidget;
 		return ChatTab;
@@ -1171,6 +1200,27 @@ private:
 	TSharedRef<SDockTab> SpawnChatTab(const FSpawnTabArgs& Args)
 	{
 		return CreateChatDockTab();
+	}
+
+	TSharedRef<SDockTab> SpawnChatTabAtIndex(const FSpawnTabArgs& Args, const int32 TabIndex)
+	{
+		return CreateChatDockTab(TabIndex);
+	}
+
+	/** Opens the lowest-numbered chat tab that is not already live, so each agent gets its own. */
+	void OpenNextChatTab()
+	{
+		for (int32 Index = 1; Index <= MaxChatTabs; ++Index)
+		{
+			const FName TabName = ChatTabNameForIndex(Index);
+			if (!FGlobalTabmanager::Get()->FindExistingLiveTab(FTabId(TabName)).IsValid())
+			{
+				FGlobalTabmanager::Get()->TryInvokeTab(TabName);
+				return;
+			}
+		}
+		UE_LOG(LogHyperAIStudio, Display,
+			TEXT("All %d HyperAI chat tabs are already open; close one to start another agent."), MaxChatTabs);
 	}
 
 	void RegisterMenus()

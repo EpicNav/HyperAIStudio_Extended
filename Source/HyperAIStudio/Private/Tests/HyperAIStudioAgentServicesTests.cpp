@@ -4,6 +4,7 @@
 
 #include "Containers/Ticker.h"
 #include "HyperAIStudioAgentActivity.h"
+#include "HyperAIStudioAgentState.h"
 #include "HyperAIStudioAgentChatHistory.h"
 #include "HyperAIStudioApprovalGate.h"
 #include "HyperAIStudioAsyncJobHost.h"
@@ -201,6 +202,68 @@ bool FHyperAIStudioUnrealMcpEvidenceTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("A quoted tool catalogue does not count"),
 		MentionsUnrealMcpCall(TEXT("{\"text\":\"mcp__unreal_mcp__call_tool\\\",\\\"description\\\":\\\"Call a tool\"}")));
 	TestFalse(TEXT("Unrelated text does not count"), MentionsUnrealMcpCall(TEXT("{\"name\":\"Read\"}")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHyperAIStudioAgentStateTest,
+	"HyperAIStudio.Chat.AgentState",
+	HyperAIStudio::ServiceTests::Flags)
+
+bool FHyperAIStudioAgentStateTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	using FEval = FHyperAIStudioAgentStateEvaluator;
+	const TArray<FString> NeedsInput = FEval::DefaultNeedsInputPatterns();
+	const TArray<FString> PlanReview = FEval::DefaultPlanReviewPatterns();
+	const TArray<FString> Blocked = FEval::DefaultBlockedPatterns();
+	auto Evaluate = [&](const FHyperAIStudioAgentStateInputs& Inputs)
+	{
+		return FEval::EvaluateWithPatterns(Inputs, NeedsInput, PlanReview, Blocked);
+	};
+
+	FHyperAIStudioAgentStateInputs Inputs;
+	TestEqual(TEXT("No session means stopped"), Evaluate(Inputs).State, EHyperAIStudioAgentState::Stopped);
+
+	// Facts the editor owns outrank whatever the screen happens to show.
+	Inputs.bSessionRunning = true;
+	Inputs.bApprovalPending = true;
+	Inputs.Tail = TEXT("working...");
+	TestEqual(TEXT("A plan waiting for approval blocks the tab"), Evaluate(Inputs).State, EHyperAIStudioAgentState::Blocked);
+	Inputs.bApprovalPending = false;
+	Inputs.bStartupPending = true;
+	TestEqual(TEXT("Startup is reported while the CLI boots"), Evaluate(Inputs).State, EHyperAIStudioAgentState::Starting);
+	Inputs.bStartupPending = false;
+
+	Inputs.SecondsSinceOutput = 0.2;
+	Inputs.Tail = TEXT("Reading files Editing NS_Fire");
+	TestEqual(TEXT("Recent output means working"), Evaluate(Inputs).State, EHyperAIStudioAgentState::Working);
+
+	Inputs.SecondsSinceOutput = 30.0;
+	TestEqual(TEXT("Silence with no prompt means ready"), Evaluate(Inputs).State, EHyperAIStudioAgentState::Idle);
+
+	// A question outranks working: the agent may still be redrawing its prompt.
+	Inputs.SecondsSinceOutput = 0.1;
+	Inputs.Tail = TEXT("Edit file NS_Fire.uasset ? 1. Yes 2. No");
+	FHyperAIStudioAgentStateSnapshot Snapshot = Evaluate(Inputs);
+	TestEqual(TEXT("A choice prompt needs the user"), Snapshot.State, EHyperAIStudioAgentState::NeedsInput);
+	TestEqual(TEXT("The matched line is kept as evidence"), Snapshot.Evidence, FString(TEXT("1. Yes")));
+	TestTrue(TEXT("Needing input asks for attention"), FEval::WantsAttention(Snapshot.State));
+
+	Inputs.Tail = TEXT("Here is the plan 1. Rework the emitter");
+	TestEqual(TEXT("A plan is distinguished from a permission prompt"), Evaluate(Inputs).State, EHyperAIStudioAgentState::PlanReview);
+
+	Inputs.Tail = TEXT("Error: usage limit reached, resets at 4pm");
+	TestEqual(TEXT("A usage limit blocks"), Evaluate(Inputs).State, EHyperAIStudioAgentState::Blocked);
+
+	Inputs.Tail = TEXT("status: awaiting_user_approval");
+	TestEqual(TEXT("Our own awaiting_user_approval blocks the tab that submitted it"),
+		Evaluate(Inputs).State, EHyperAIStudioAgentState::Blocked);
+
+	Inputs.Tail = TEXT("all done, nothing to do");
+	TestEqual(TEXT("Ordinary output does not match a pattern"), Evaluate(Inputs).State, EHyperAIStudioAgentState::Working);
+	TestFalse(TEXT("Working needs no attention"), FEval::WantsAttention(EHyperAIStudioAgentState::Working));
+	TestFalse(TEXT("Idle needs no attention"), FEval::WantsAttention(EHyperAIStudioAgentState::Idle));
 	return true;
 }
 

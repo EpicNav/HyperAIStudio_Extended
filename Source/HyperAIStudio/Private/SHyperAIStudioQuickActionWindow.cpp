@@ -16,6 +16,7 @@
 #include "DragAndDrop/ActorDragDropOp.h"
 #include "DragAndDrop/AssetDragDropOp.h"
 #include "Editor.h"
+#include "Framework/Docking/TabManager.h"
 #include "Engine/Selection.h"
 #include "IContentBrowserSingleton.h"
 #include "HAL/FileManager.h"
@@ -42,6 +43,7 @@
 #include "Widgets/Layout/SScrollBar.h"
 #include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Text/STextBlock.h"
 
 #define LOCTEXT_NAMESPACE "SHyperAIStudioQuickActionWindow"
@@ -221,6 +223,8 @@ namespace HyperAIStudio::QuickAction
 void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 {
 	OnOpenWorkbench = InArgs._OnOpenWorkbench;
+	OnNewAgentTab = InArgs._OnNewAgentTab;
+	TabIndex = FMath::Max(1, InArgs._TabIndex);
 	Service = MakeShared<FHyperAIStudioService>();
 	Status = Service->GetStatusSync();
 	LastMessage = HyperAIStudio::QuickAction::MessageForStatus(Status);
@@ -372,6 +376,8 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 	RegisterActiveTimer(0.15f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunDeferredRefresh));
 	// The MCP pill is only honest if it is re-probed; the probe is async and idles when nothing changed.
 	RegisterActiveTimer(15.0f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunStatusHeartbeat));
+	// Reading the agent's screen is cheap; half a second is fast enough to notice a prompt, slow enough to be free.
+	RegisterActiveTimer(0.5f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunAgentStateHeartbeat));
 	RegisterActiveTimer(0.35f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunDeferredTerminalStartup));
 	RegisterActiveTimer(0.25f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunQueuedVisibleTerminalCommandPoll));
 }
@@ -645,6 +651,13 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildHeader()
 		.VAlign(VAlign_Center)
 		.Padding(6.0f, 0.0f, 0.0f, 0.0f)
 		[
+			BuildAgentStateBadge()
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(6.0f, 0.0f, 0.0f, 0.0f)
+		[
 			BuildMcpStatusSelector()
 		]
 		+ SHorizontalBox::Slot()
@@ -694,6 +707,26 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildHeader()
 							: LOCTEXT("ActivityToggle", "Activity");
 					})
 				]
+			]
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(0.0f, 0.0f, 2.0f, 0.0f)
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ToolTipText(LOCTEXT("NewAgentTabTooltip", "Open another chat tab. Each tab runs its own agent; dock them side by side to watch both."))
+			.IsEnabled_Lambda([this]() { return OnNewAgentTab.IsBound(); })
+			.OnClicked_Lambda([this]()
+			{
+				OnNewAgentTab.ExecuteIfBound();
+				return FReply::Handled();
+			})
+			[
+				SNew(SImage)
+				.Image(FAppStyle::GetBrush(TEXT("Icons.Plus")))
+				.ColorAndOpacity(FSlateColor::UseForeground())
 			]
 		]
 		+ SHorizontalBox::Slot()
@@ -1441,6 +1474,104 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunDeferredRefresh(doubl
 {
 	RefreshStatus();
 	return EActiveTimerReturnType::Stop;
+}
+
+void SHyperAIStudioQuickActionWindow::SetOwnerTab(const TSharedRef<SDockTab>& InTab)
+{
+	OwnerTab = InTab;
+	InTab->SetLabel(GetTabLabel());
+}
+
+FText SHyperAIStudioQuickActionWindow::GetTabLabel() const
+{
+	const FText Base = TabIndex <= 1
+		? LOCTEXT("TabLabelFirst", "HyperAI Chat")
+		: FText::Format(LOCTEXT("TabLabelNumbered", "HyperAI Chat {0}"), TabIndex);
+	// The tab label is what you read when the panel is not on screen, so the state belongs in it.
+	if (AgentState.State == EHyperAIStudioAgentState::Stopped || AgentState.Label.IsEmpty())
+	{
+		return Base;
+	}
+	return FText::Format(LOCTEXT("TabLabelWithState", "{0} - {1}"), Base, AgentState.Label);
+}
+
+EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunAgentStateHeartbeat(double CurrentTime, float DeltaTime)
+{
+	FHyperAIStudioAgentStateInputs Inputs;
+	Inputs.bSessionRunning = TerminalWidget.IsValid() && TerminalWidget->IsSessionRunning();
+	Inputs.bStartupPending = Inputs.bSessionRunning && !bTerminalStartupSent && !bTerminalStartupPaused;
+	if (Inputs.bSessionRunning && HyperAIStudio::TerminalRawInput::IsAvailable())
+	{
+		Inputs.Tail = HyperAIStudio::TerminalRawInput::ReadVisibleTail(
+			*TerminalWidget, FHyperAIStudioAgentStateEvaluator::TailRows);
+		const double LastOutput = HyperAIStudio::TerminalRawInput::GetLastOutputTime(*TerminalWidget);
+		Inputs.SecondsSinceOutput = LastOutput > 0.0 ? FPlatformTime::Seconds() - LastOutput : -1.0;
+	}
+
+	const FHyperAIStudioAgentStateSnapshot Previous = AgentState;
+	AgentState = FHyperAIStudioAgentStateEvaluator::Evaluate(Inputs);
+	if (AgentState.State == Previous.State)
+	{
+		return EActiveTimerReturnType::Continue;
+	}
+
+	if (const TSharedPtr<SDockTab> Tab = OwnerTab.Pin())
+	{
+		Tab->SetLabel(GetTabLabel());
+		// Flash the tab only on the way into a state that needs a person, so a background tab still gets noticed.
+		if (FHyperAIStudioAgentStateEvaluator::WantsAttention(AgentState.State)
+			&& !FHyperAIStudioAgentStateEvaluator::WantsAttention(Previous.State))
+		{
+			FGlobalTabmanager::Get()->DrawAttention(Tab.ToSharedRef());
+		}
+	}
+	AddTranscriptLine(FString::Printf(TEXT("Agent is %s%s"),
+		FHyperAIStudioAgentStateEvaluator::LexToString(AgentState.State),
+		AgentState.Evidence.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" (%s)"), *AgentState.Evidence)));
+	Invalidate(EInvalidateWidgetReason::Paint);
+	return EActiveTimerReturnType::Continue;
+}
+
+TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildAgentStateBadge()
+{
+	return SNew(SHorizontalBox)
+		.ToolTipText_Lambda([this]()
+		{
+			return AgentState.Evidence.IsEmpty()
+				? FText::Format(LOCTEXT("AgentStateTooltip", "This tab's agent is {0}."), AgentState.Label)
+				: FText::Format(LOCTEXT("AgentStateTooltipEvidence", "This tab's agent is {0}.\nFrom its screen: {1}"),
+					AgentState.Label, FText::FromString(AgentState.Evidence));
+		})
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		[
+			SNew(SImage)
+			.Image(FAppStyle::GetBrush(TEXT("Icons.BulletPoint")))
+			.ColorAndOpacity(this, &SHyperAIStudioQuickActionWindow::GetAgentStateColor)
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(3.0f, 0.0f, 0.0f, 0.0f)
+		[
+			SNew(STextBlock)
+			.Text_Lambda([this]() { return AgentState.Label; })
+			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+		];
+}
+
+FSlateColor SHyperAIStudioQuickActionWindow::GetAgentStateColor() const
+{
+	switch (AgentState.State)
+	{
+	case EHyperAIStudioAgentState::NeedsInput:
+	case EHyperAIStudioAgentState::PlanReview: return FSlateColor(FStyleColors::AccentYellow);
+	case EHyperAIStudioAgentState::Blocked: return FSlateColor(FStyleColors::AccentRed);
+	case EHyperAIStudioAgentState::Working: return FSlateColor(FStyleColors::AccentBlue);
+	case EHyperAIStudioAgentState::Idle: return FSlateColor(FStyleColors::AccentGreen);
+	default: return FSlateColor::UseSubduedForeground();
+	}
 }
 
 EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunStatusHeartbeat(double CurrentTime, float DeltaTime)

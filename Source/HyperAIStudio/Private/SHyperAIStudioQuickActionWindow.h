@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Animation/CurveSequence.h"
+#include "HyperAIStudioAgentState.h"
 #include "HyperAIStudioService.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SComboBox.h"
@@ -14,9 +15,16 @@ class SHyperAIStudioQuickActionWindow : public SCompoundWidget
 public:
 	SLATE_BEGIN_ARGS(SHyperAIStudioQuickActionWindow) {}
 		SLATE_EVENT(FSimpleDelegate, OnOpenWorkbench)
+		/** Opens another chat tab, so a second agent can work alongside this one. */
+		SLATE_EVENT(FSimpleDelegate, OnNewAgentTab)
+		/** 1 for the first chat tab; shown in the tab label so tabs can be told apart. */
+		SLATE_ARGUMENT(int32, TabIndex)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
+	/** The dock tab hosting this panel, so its label can carry the agent's state. */
+	void SetOwnerTab(const TSharedRef<class SDockTab>& InTab);
+	EHyperAIStudioAgentState GetAgentState() const { return AgentState.State; }
 	bool IsActiveOrSelectedAgent(const FString& AgentName) const;
 	void SelectAgentByName(const FString& AgentName);
 	/** Restart the terminal on that chat's agent, resuming the conversation. */
@@ -67,6 +75,11 @@ private:
 	void AddTranscriptLine(const FString& Line);
 	EActiveTimerReturnType RunDeferredRefresh(double CurrentTime, float DeltaTime);
 	EActiveTimerReturnType RunStatusHeartbeat(double CurrentTime, float DeltaTime);
+	/** Re-reads what this tab's agent is showing and updates the tab label when it changes. */
+	EActiveTimerReturnType RunAgentStateHeartbeat(double CurrentTime, float DeltaTime);
+	TSharedRef<SWidget> BuildAgentStateBadge();
+	FSlateColor GetAgentStateColor() const;
+	FText GetTabLabel() const;
 	EActiveTimerReturnType RunDeferredTerminalStartup(double CurrentTime, float DeltaTime);
 	EActiveTimerReturnType RunDeferredVisibleTerminalCommand(double CurrentTime, float DeltaTime);
 	EActiveTimerReturnType RunQueuedVisibleTerminalCommandPoll(double CurrentTime, float DeltaTime);
@@ -114,4 +127,8 @@ private:
 	/** Chat the next agent startup resumes; cleared once that startup is sent. */
 	FString ResumeAgentName;
 	FString ResumeSessionId;
+	FSimpleDelegate OnNewAgentTab;
+	TWeakPtr<class SDockTab> OwnerTab;
+	int32 TabIndex = 1;
+	FHyperAIStudioAgentStateSnapshot AgentState;
 };

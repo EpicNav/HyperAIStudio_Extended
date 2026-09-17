@@ -230,6 +230,22 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow")
 	bool bRequireApprovalForAgentEdits = true;
 
+	/**
+	 * Lines that mean an agent is waiting for an answer: a permission prompt, a choice, a confirmation.
+	 * Matched case-insensitively against the last rows of that tab's terminal. Empty restores the built-in list.
+	 * These exist because agent CLIs change their wording; editing them here beats waiting for a plugin build.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Tab Status")
+	TArray<FString> AgentNeedsInputPatterns;
+
+	/** Lines that mean an agent is showing a plan and waiting to be told to go ahead. */
+	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Tab Status")
+	TArray<FString> AgentPlanReviewPatterns;
+
+	/** Lines that mean an agent cannot proceed: a rate limit, a login, a busy editor lane. */
+	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Tab Status")
+	TArray<FString> AgentBlockedPatterns;
+
 	/** Models offered per chat agent. Agents without an entry get one the first time HyperAI Chat opens. */
 	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Models")
 	TArray<FHyperAIStudioAgentModelRoute> AgentModelRoutes;
