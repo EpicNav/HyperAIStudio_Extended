@@ -69,7 +69,8 @@ private:
 	FReply OnPreparePromptClicked(FString AgentName);
 	FReply OnToggleTerminalAgentClicked();
 	FReply OnOpenWorkbenchClicked();
-	void RefreshStatus();
+	/** bSilent keeps the current status on screen until the probe settles (heartbeat re-probes). */
+	void RefreshStatus(bool bSilent = false);
 	void RefreshAgentOptions();
 	void ResetTranscript();
 	void AddTranscriptLine(const FString& Line);
@@ -94,7 +95,6 @@ private:
 	FText GetTranscriptText() const;
 	FText GetReadinessText() const;
 	FSlateColor GetReadinessColor() const;
-	FText GetNextActionText() const;
 
 	TSharedPtr<FHyperAIStudioService> Service;
 	FHyperAIStudioStatus Status;
@@ -118,6 +118,11 @@ private:
 	FSimpleDelegate OnOpenWorkbench;
 	FText LastMessage;
 	bool bRefreshing = false;
+	/**
+	 * Hint under the header, set only when a probe settles. Every re-probe briefly reports "not ready",
+	 * and binding the line to live status made it expand and collapse on each heartbeat.
+	 */
+	FText StatusHint;
 	bool bTerminalStartupSent = false;
 	bool bTerminalStartupPaused = false;
 	bool bVisibleTerminalCommandPending = false;

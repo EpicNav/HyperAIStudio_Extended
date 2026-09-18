@@ -787,11 +787,11 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildStatusLine()
 {
 	// When ready the badge already says so; the hint only earns its space while something needs fixing.
 	return SNew(SBox)
-		.Visibility_Lambda([this]() { return Status.IsReady() ? EVisibility::Collapsed : EVisibility::Visible; })
+		.Visibility_Lambda([this]() { return StatusHint.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
 		.Padding(FMargin(0.0f, 8.0f, 0.0f, 0.0f))
 		[
 			SNew(STextBlock)
-			.Text(this, &SHyperAIStudioQuickActionWindow::GetNextActionText)
+			.Text_Lambda([this]() { return StatusHint; })
 			.AutoWrapText(true)
 			.ColorAndOpacity(this, &SHyperAIStudioQuickActionWindow::GetReadinessColor)
 		];
@@ -1311,7 +1311,7 @@ FReply SHyperAIStudioQuickActionWindow::OnOpenWorkbenchClicked()
 	return FReply::Handled();
 }
 
-void SHyperAIStudioQuickActionWindow::RefreshStatus()
+void SHyperAIStudioQuickActionWindow::RefreshStatus(const bool bSilent)
 {
 	if (!Service.IsValid())
 	{
@@ -1319,16 +1319,29 @@ void SHyperAIStudioQuickActionWindow::RefreshStatus()
 	}
 
 	bRefreshing = true;
-	Status = Service->GetStatusSync();
-	TWeakPtr<SHyperAIStudioQuickActionWindow> WeakThis = StaticCastSharedRef<SHyperAIStudioQuickActionWindow>(AsShared());
-	Service->RefreshStatusAsync([WeakThis](const FHyperAIStudioStatus& NewStatus)
+	// A silent re-probe keeps the last settled status on screen: no Checking badge, no greyed-out
+	// agent buttons, no "Status:" log line every heartbeat. Only a settled change shows.
+	if (!bSilent)
 	{
+		Status = Service->GetStatusSync();
+	}
+	TWeakPtr<SHyperAIStudioQuickActionWindow> WeakThis = StaticCastSharedRef<SHyperAIStudioQuickActionWindow>(AsShared());
+	Service->RefreshStatusAsync([WeakThis, bSilent](const FHyperAIStudioStatus& NewStatus)
+	{
+		if (bSilent && NewStatus.bProbeInProgress)
+		{
+			return;
+		}
 		if (const TSharedPtr<SHyperAIStudioQuickActionWindow> Pinned = WeakThis.Pin())
 		{
 			const bool bShouldUpdateDefaultMessage = HyperAIStudio::QuickAction::IsDefaultStatusMessage(Pinned->LastMessage);
 			const FString PreviousReadiness = Pinned->GetReadinessText().ToString();
 			Pinned->Status = NewStatus;
 			Pinned->bRefreshing = NewStatus.bProbeInProgress;
+			if (!NewStatus.bProbeInProgress)
+			{
+				Pinned->StatusHint = NewStatus.IsReady() ? FText::GetEmpty() : GetNextActionTextForStatus(NewStatus, false);
+			}
 			if (bShouldUpdateDefaultMessage)
 			{
 				Pinned->LastMessage = HyperAIStudio::QuickAction::MessageForStatus(NewStatus);
@@ -1579,7 +1592,7 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunStatusHeartbeat(doubl
 	// Only re-probe when the previous one finished, so a slow endpoint cannot queue probes on top of each other.
 	if (!bRefreshing && !Status.bProbeInProgress)
 	{
-		RefreshStatus();
+		RefreshStatus(/*bSilent=*/true);
 	}
 	return EActiveTimerReturnType::Continue;
 }
@@ -1840,11 +1853,6 @@ FSlateColor SHyperAIStudioQuickActionWindow::GetReadinessColor() const
 		return HyperAIStudio::QuickAction::WarningColor();
 	}
 	return HyperAIStudio::QuickAction::ErrorColor();
-}
-
-FText SHyperAIStudioQuickActionWindow::GetNextActionText() const
-{
-	return GetNextActionTextForStatus(Status, bRefreshing);
 }
 
 FText SHyperAIStudioQuickActionWindow::GetNextActionTextForStatus(const FHyperAIStudioStatus& InStatus, bool bIsRefreshing)
