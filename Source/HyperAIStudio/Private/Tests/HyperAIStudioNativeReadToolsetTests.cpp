@@ -16,6 +16,7 @@
 #include "ToolsetRegistry/ToolsetRegistrySubsystem.h"
 #include "ToolsetRegistry/UToolsetRegistry.h"
 #include "UObject/FieldIterator.h"
+#include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
 
 namespace HyperAIStudio::NativeReadTools::Tests
@@ -27,10 +28,7 @@ namespace HyperAIStudio::NativeReadTools::Tests
 	constexpr int32 CurrentSourceCandidateToolCount = CurrentCatalogToolCount;
 	constexpr int32 CurrentAdmittedToolCount = 0;
 	constexpr int32 CurrentCoreImplementedToolCount = 27;
-	constexpr int32 CurrentDevImplementedToolCount = CurrentCatalogToolCount;
 	constexpr int32 CurrentCoreToolsetCount = 15;
-	// Runtime evidence, not catalog size: one per loaded optional toolset (texture_graph made it 41).
-	constexpr int32 CurrentDevToolsetCount = 41;
 
 	struct FExpectedTool
 	{
@@ -675,10 +673,39 @@ bool FHyperAIStudioNativeReadSchemaRegistrationTest::RunTest(const FString& Para
 		Capability.DiagnosticSummary.Contains(TEXT("Stable"), ESearchCase::IgnoreCase));
 	TestFalse(TEXT("User-facing capability summary hides admission terminology"),
 		Capability.DiagnosticSummary.Contains(TEXT("SourceCandidate"), ESearchCase::IgnoreCase));
+	// Which optional modules load depends on the plugins this project enables, so count what is actually
+	// implemented by reflection instead of assuming every optional pack is present.
+	TMap<FName, const UClass*> ImplementingToolset;
+	for (TObjectIterator<UClass> It; It; ++It)
+	{
+		const UClass* Class = *It;
+		if (!Class->IsChildOf(UToolsetDefinition::StaticClass())
+			|| Class->HasAnyClassFlags(CLASS_Abstract | CLASS_NewerVersionExists | CLASS_Deprecated))
+		{
+			continue;
+		}
+		for (TFieldIterator<UFunction> Function(Class, EFieldIteratorFlags::ExcludeSuper); Function; ++Function)
+		{
+			ImplementingToolset.Add(Function->GetFName(), Class);
+		}
+	}
+	int32 CurrentDevImplementedToolCount = 0;
+	TSet<const UClass*> LoadedToolsets;
+	for (const FHyperAIStudioCapabilityToolDefinition& Tool : Catalog.Tools)
+	{
+		if (const UClass* const* Owner = ImplementingToolset.Find(FName(*Tool.Name)))
+		{
+			++CurrentDevImplementedToolCount;
+			LoadedToolsets.Add(*Owner);
+		}
+	}
+	const int32 CurrentDevToolsetCount = LoadedToolsets.Num();
+	AddInfo(FString::Printf(TEXT("%d of %d catalog tools are implemented by %d loaded toolsets."),
+		CurrentDevImplementedToolCount, Catalog.Tools.Num(), CurrentDevToolsetCount));
+
 	TestEqual(TEXT("Capability report advertises only registration/admission-authorized callables"),
 		Capability.CallableHyperAIToolCount,
-		bPendingTestGate ? CurrentSourceCandidateToolCount + CurrentAdmittedToolCount
-			: CurrentAdmittedToolCount);
+		bPendingTestGate ? CurrentDevImplementedToolCount : CurrentAdmittedToolCount);
 	TestEqual(TEXT("Core implementations are always indexed and the optional cohort only when loaded"),
 		Capability.RuntimeImplementedHyperAIToolCount,
 		bPendingTestGate ? CurrentDevImplementedToolCount : CurrentCoreImplementedToolCount);
@@ -834,10 +861,10 @@ bool FHyperAIStudioNativeReadSchemaRegistrationTest::RunTest(const FString& Para
 					&& Tool.Availability == TEXT("callable_preview")
 					&& Tool.bCallable;
 			}));
-		TestFalse(TEXT("No source candidate remains non-callable in the full dev cohort"),
+		TestFalse(TEXT("No loaded source candidate remains non-callable in the dev cohort"),
 			Capability.NativeTools.ContainsByPredicate([](const FHyperAINativeToolSummary& Tool)
 			{
-				return Tool.AdmissionState == TEXT("source_candidate") && !Tool.bCallable;
+				return Tool.AdmissionState == TEXT("source_candidate") && Tool.bImplementationLoaded && !Tool.bCallable;
 			}));
 		TestTrue(TEXT("Loaded optional Enhanced Input cohort is reported callable"),
 			Capability.NativeTools.ContainsByPredicate([](const FHyperAINativeToolSummary& Tool)

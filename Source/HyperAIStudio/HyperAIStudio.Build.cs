@@ -33,6 +33,7 @@ public class HyperAIStudio : ModuleRules
 			"ModelContextProtocol",
 			"ModelContextProtocolEngine",
 			"Projects",
+			"RenderCore",
 			"Settings",
 			"Sockets",
 			"Terminal",

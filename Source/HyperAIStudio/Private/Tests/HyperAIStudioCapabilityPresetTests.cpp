@@ -121,6 +121,12 @@ bool FHyperAIStudioCapabilityPresetResolverTest::RunTest(const FString& Paramete
 	TestRequirements(TEXT("WorldConditionsToolset"), { TEXT("WorldConditions") });
 
 	UHyperAIStudioSettings* Settings = NewObject<UHyperAIStudioSettings>();
+	// NewObject copies the project's saved settings; the optional extras must start off or they leak into every case.
+	Settings->bEnableChaosClothAssetToolset = false;
+	Settings->bEnableLiveCodingToolset = false;
+	Settings->bEnableMetaHumanGenerator = false;
+	Settings->bEnableMVVMToolset = false;
+	Settings->bEnableSequencerAnimMixerToolset = false;
 	Settings->CapabilityPreset = EHyperAIStudioCapabilityPreset::Core;
 	TSet<FString> EnabledPlugins;
 	TArray<FString> Desired =
