@@ -4839,6 +4839,8 @@ void BuildAgentInstructionBlocks(
 		TEXT("- Use `.hyperai/scripts/Wait-HyperAIStudioMCP.ps1 -TimeoutSeconds 90` for a readiness-only retry, then continue the requested task.") LINE_TERMINATOR LINE_TERMINATOR +
 		TEXT("## Context Packs") LINE_TERMINATOR LINE_TERMINATOR +
 		TEXT("- Only read `.hyperai/context/` files when the prompt explicitly references them.") LINE_TERMINATOR LINE_TERMINATOR +
+		TEXT("## Domain Guides") LINE_TERMINATOR LINE_TERMINATOR +
+		TEXT("- Before designing or changing an Animation Blueprint, read `.hyperai/docs/HyperAIStudio-AnimationCookbook.md`.") LINE_TERMINATOR LINE_TERMINATOR +
 		TEXT("## Shared Project Workspace") LINE_TERMINATOR LINE_TERMINATOR +
 		TEXT("- Treat `.hyperai/` as the shared, Git-trackable workspace for useful agent context, prompts, plans, research, decisions, logs, and task-local scratch files.") LINE_TERMINATOR +
 		TEXT("- Do not create generic agent-work folders such as `Planning`, `Temp`, `Research`, `Notes`, or `Scripts` in the project root.") LINE_TERMINATOR +

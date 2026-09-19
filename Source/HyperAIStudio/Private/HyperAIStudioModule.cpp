@@ -984,6 +984,14 @@ private:
 				{}
 			},
 			{
+				TEXT("HyperAIStudioAnimBlueprint"),
+				TEXT("anim_blueprint"),
+				TEXT("cohort.source.hyperaistudioanimblueprinttoolset.v1"),
+				{TEXT("hyper_anim_blueprint_inspect"), TEXT("hyper_anim_blueprint_apply_plan"),
+					TEXT("hyper_anim_blueprint_validate")},
+				{}
+			},
+			{
 				TEXT("HyperAIStudioPCG"),
 				TEXT("pcg"),
 				TEXT("cohort.source.hyperaistudiopcgtoolset.v1"),

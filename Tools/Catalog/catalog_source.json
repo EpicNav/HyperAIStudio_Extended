@@ -352,6 +352,10 @@
   {
    "id": "probe.level_design_editor_world",
    "kind": "Probe"
+  },
+  {
+   "id": "probe.anim_blueprint_graph",
+   "kind": "Probe"
   }
  ],
  "packs": [
@@ -1901,6 +1905,46 @@
     {
      "name": "hyper_level_design_validate",
      "cohort": "cohort.source.hyperaistudioleveldesigntoolset.v1",
+     "safety": [
+      "Read"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "anim_blueprint",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "anim_blueprint_backend",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.anim_blueprint_graph"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_anim_blueprint_inspect",
+     "cohort": "cohort.source.hyperaistudioanimblueprinttoolset.v1",
+     "safety": [
+      "Read"
+     ]
+    },
+    {
+     "name": "hyper_anim_blueprint_apply_plan",
+     "cohort": "cohort.source.hyperaistudioanimblueprinttoolset.v1",
+     "safety": [
+      "Edit"
+     ]
+    },
+    {
+     "name": "hyper_anim_blueprint_validate",
+     "cohort": "cohort.source.hyperaistudioanimblueprinttoolset.v1",
      "safety": [
       "Read"
      ]
