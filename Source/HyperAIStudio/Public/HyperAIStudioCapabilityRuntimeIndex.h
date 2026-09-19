@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "HyperAIStudioCapabilityCatalogCounts.h"
 
 class UClass;
 
@@ -28,8 +29,8 @@ struct HYPERAISTUDIO_API FHyperAIStudioRuntimeToolBinding
 class HYPERAISTUDIO_API FHyperAIStudioCapabilityRuntimeIndex final
 {
 public:
-	// The generated catalog's 109 tools plus the three-tool texture_graph cohort.
-	static constexpr int32 MaxRuntimeToolBindings = 112;
+	// Every tool in the generated catalog; Tools/Catalog/build_catalog.py keeps the count current.
+	static constexpr int32 MaxRuntimeToolBindings = HyperAIStudio::CapabilityCatalog::GeneratedToolCount;
 	static constexpr int32 MaxDiagnostics = 32;
 
 	/**

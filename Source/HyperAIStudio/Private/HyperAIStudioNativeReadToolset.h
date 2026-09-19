@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Delegates/Delegate.h"
+#include "HyperAIStudioCapabilityCatalogCounts.h"
 #include "HyperAIStudioOperationJournal.h"
 #include "ToolsetRegistry/ToolsetDefinition.h"
 
@@ -764,7 +765,7 @@ class FHyperAIStudioNativeReadContracts final
 {
 public:
 	static constexpr int32 MaxPageSize = 64;
-	static constexpr int32 MaxCatalogToolCount = 109;
+	static constexpr int32 MaxCatalogToolCount = HyperAIStudio::CapabilityCatalog::GeneratedToolCount;
 	static constexpr int32 MaxCursorCharacters = 160;
 	static constexpr int32 MaxDiagnosticCharacters = 512;
 	static constexpr int32 MaxPathCharacters = 1024;

@@ -3,6 +3,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "HyperAIStudioCapabilityPackRegistry.h"
+#include "HyperAIStudioCapabilityCatalogCounts.h"
 #include "Algo/Reverse.h"
 #include "Misc/AutomationTest.h"
 
@@ -105,8 +106,8 @@ bool FHyperAIStudioCapabilityPackCatalogCoverageTest::RunTest(const FString& Par
 		AddError(TEXT("Catalog diagnostic: ") + Error);
 	}
 	TestEqual(TEXT("Validation produces no diagnostics"), Errors.Num(), 0);
-	TestEqual(TEXT("Foundation plus 25 packs are present"), Catalog.Packs.Num(), 26);
-	TestEqual(TEXT("Exactly 109 approved contracts are bound"), Catalog.Tools.Num(), 109);
+	TestEqual(TEXT("Every generated pack is present"), Catalog.Packs.Num(), HyperAIStudio::CapabilityCatalog::GeneratedPackCount);
+	TestEqual(TEXT("Every generated contract is bound"), Catalog.Tools.Num(), HyperAIStudio::CapabilityCatalog::GeneratedToolCount);
 
 	TSet<FString> ToolNames;
 	TSet<FString> PackIds;
@@ -152,7 +153,7 @@ bool FHyperAIStudioCapabilityPackCatalogCoverageTest::RunTest(const FString& Par
 				+ Tool.SupplementalEvidenceRows);
 	}
 	TestEqual(TEXT("Shared foundation contains exactly five tools"), FoundationTools, 5);
-	TestEqual(TEXT("All generated names remain unique"), ToolNames.Num(), 109);
+	TestEqual(TEXT("All generated names remain unique"), ToolNames.Num(), HyperAIStudio::CapabilityCatalog::GeneratedToolCount);
 	TestEqual(
 		TEXT("Catalog source-artifact total matches the generated per-tool bindings"),
 		Catalog.SourceArtifactCount,

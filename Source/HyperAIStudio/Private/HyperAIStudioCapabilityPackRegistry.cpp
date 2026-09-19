@@ -1,6 +1,7 @@
 // Games by Hyper 2026.
 
 #include "HyperAIStudioCapabilityPackRegistry.h"
+#include "HyperAIStudioCapabilityCatalogCounts.h"
 
 #include "Misc/SecureHash.h"
 
@@ -849,7 +850,8 @@ bool FHyperAIStudioCapabilityPackRegistry::ValidateCatalog(
 
 bool FHyperAIStudioCapabilityPackRegistry::ValidateBuiltInCatalog(TArray<FString>& OutErrors)
 {
-	return ValidateCatalog(GetCatalog(), OutErrors, 109, 26);
+	return ValidateCatalog(GetCatalog(), OutErrors,
+		HyperAIStudio::CapabilityCatalog::GeneratedToolCount, HyperAIStudio::CapabilityCatalog::GeneratedPackCount);
 }
 
 FHyperAIStudioCapabilityResolution FHyperAIStudioCapabilityPackRegistry::Resolve(

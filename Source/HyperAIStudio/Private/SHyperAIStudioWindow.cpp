@@ -8,6 +8,7 @@
 #include "HAL/PlatformProcess.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Docking/TabManager.h"
+#include "HyperAIStudioCapabilityCatalogCounts.h"
 #include "HyperAIStudioCapabilityInventoryClient.h"
 #include "HyperAIStudioCapabilityPackRegistry.h"
 #include "HyperAIStudioLegacyMigration.h"
@@ -558,7 +559,7 @@ FHyperAIStudioWorkbenchSurfaceSmoke SHyperAIStudioWindow::GetWorkbenchSurfaceSmo
 		TEXT("Extended Hyper Tools"),
 		TEXT("Primary"),
 		TEXT("Tools"),
-		TEXT("Epic + 109 Hyper"),
+		FString::Printf(TEXT("Epic + %d Hyper"), HyperAIStudio::CapabilityCatalog::GeneratedToolCount),
 		TEXT("3 discovery dispatchers"),
 		TEXT("Optional UE 5.8 source catalog"),
 		TEXT("Search tool name, description, or toolset"),

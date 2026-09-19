@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Framework/SlateDelegates.h"
 #include "HyperAIStudioService.h"
 #include "Widgets/SCompoundWidget.h"
 

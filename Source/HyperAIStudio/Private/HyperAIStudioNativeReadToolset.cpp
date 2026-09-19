@@ -1385,7 +1385,7 @@ FHyperAICapabilityReport UHyperAIStudioNativeReadToolset::hyper_capability_repor
 	if (!IsBuiltInCatalogValid())
 	{
 		Report.Status = TEXT("capability_catalog_invalid");
-		Report.Diagnostic = TEXT("The immutable generated 109-tool capability catalog failed semantic validation.");
+		Report.Diagnostic = TEXT("The immutable generated capability catalog failed semantic validation.");
 		Report.DiagnosticSummary = TEXT("The Extended Hyper Tools catalog could not be validated.");
 		return Report;
 	}

@@ -6,6 +6,7 @@
 #include "HyperAIStudioNativeReadToolset.h"
 
 #include "Dom/JsonObject.h"
+#include "HyperAIStudioCapabilityCatalogCounts.h"
 #include "HyperAIStudioCapabilityPackRegistry.h"
 #include "HyperAIStudioCapabilityRuntimeIndex.h"
 #include "HyperAIStudioExtensionRuntime.h"
@@ -19,17 +20,17 @@
 
 namespace HyperAIStudio::NativeReadTools::Tests
 {
-	// One isolated current-catalog assertion block. Production derives every
-	// count from the generated catalog; update only these evidence constants
-	// when a centrally regenerated cohort intentionally changes admission state.
-	constexpr int32 CurrentCatalogToolCount = 109;
+	// Catalog sizes follow the generator. Every catalog tool is a source candidate with a dev
+	// implementation today; change these only when a cohort's admission state changes.
+	constexpr int32 CurrentCatalogToolCount = HyperAIStudio::CapabilityCatalog::GeneratedToolCount;
 	constexpr int32 CurrentPlannedToolCount = 0;
-	constexpr int32 CurrentSourceCandidateToolCount = 109;
+	constexpr int32 CurrentSourceCandidateToolCount = CurrentCatalogToolCount;
 	constexpr int32 CurrentAdmittedToolCount = 0;
 	constexpr int32 CurrentCoreImplementedToolCount = 27;
-	constexpr int32 CurrentDevImplementedToolCount = 109;
+	constexpr int32 CurrentDevImplementedToolCount = CurrentCatalogToolCount;
 	constexpr int32 CurrentCoreToolsetCount = 15;
-	constexpr int32 CurrentDevToolsetCount = 40;
+	// Runtime evidence, not catalog size: one per loaded optional toolset (texture_graph made it 41).
+	constexpr int32 CurrentDevToolsetCount = 41;
 
 	struct FExpectedTool
 	{

@@ -9,6 +9,11 @@
 #include "HyperAIStudioAgentChatHistory.h"
 #include "HyperAIStudioApprovalGate.h"
 #include "HyperAIStudioAsyncJobHost.h"
+#include "HyperAIStudioResultPreview.h"
+#include "HAL/FileManager.h"
+#include "Misc/App.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "HyperAIStudioSettings.h"
 #include "Misc/AutomationTest.h"
 
@@ -308,6 +313,45 @@ bool FHyperAIStudioCohortMismatchTest::RunTest(const FString& Parameters)
 
 	TestFalse(TEXT("An empty declaration is refused with a reason"),
 		FRuntime::DescribeExactGeneratedCohortMismatch(FString(), Cohort, NiagaraTools).IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHyperAIStudioResultPreviewTest,
+	"HyperAIStudio.Chat.ResultPreview",
+	HyperAIStudio::ServiceTests::Flags)
+bool FHyperAIStudioResultPreviewTest::RunTest(const FString& Parameters)
+{
+	const FString Path = FHyperAIStudioResultPreview::GetAssetPreviewPath(TEXT("/Game/FX/M_Fire.M_Fire"));
+	const FString PreviewRoot = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("HyperAIStudio/Previews"));
+	TestTrue(TEXT("Previews live under Saved/HyperAIStudio/Previews"), Path.StartsWith(PreviewRoot));
+	TestTrue(TEXT("Previews are PNG files"), Path.EndsWith(TEXT(".png")));
+	TestEqual(TEXT("The path is deterministic"),
+		FHyperAIStudioResultPreview::GetAssetPreviewPath(TEXT("/Game/FX/M_Fire.M_Fire")), Path);
+	TestNotEqual(TEXT("Paths that sanitise alike still get distinct files"),
+		FHyperAIStudioResultPreview::GetAssetPreviewPath(TEXT("/Game/A_B.X")),
+		FHyperAIStudioResultPreview::GetAssetPreviewPath(TEXT("/Game/A/B.X")));
+	TestFalse(TEXT("No path separators leak into the file name"),
+		FPaths::GetCleanFilename(Path).Contains(TEXT("/")));
+
+	if (!FApp::CanEverRender())
+	{
+		AddInfo(TEXT("No renderer in this run; skipping the thumbnail render."));
+		return true;
+	}
+	UObject* Cube = LoadObject<UObject>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (!TestNotNull(TEXT("Engine cube loads"), Cube))
+	{
+		return false;
+	}
+	FString Written;
+	FString Error;
+	TestTrue(TEXT("The cube renders to a preview: ") + Error,
+		FHyperAIStudioResultPreview::WriteAssetPreview(*Cube, Written, Error));
+	TArray<uint8> Bytes;
+	TestTrue(TEXT("The preview file exists"), FFileHelper::LoadFileToArray(Bytes, *Written));
+	TestTrue(TEXT("The preview is a PNG"), Bytes.Num() > 8 && Bytes[1] == 'P' && Bytes[2] == 'N' && Bytes[3] == 'G');
+	IFileManager::Get().Delete(*Written);
 	return true;
 }
 

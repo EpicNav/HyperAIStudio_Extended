@@ -1,0 +1,2822 @@
+{
+ "schema": "hyperai.capability-pack-catalog.v2",
+ "approvedPlanFingerprint": "sha256:0111a6ad1e4b2f81b6da0439a22d83ffbfd8f7ccb20f958d8494eaeee84c6d1a",
+ "admissionMatrixFingerprint": "sha256:404ea0204015fb9558cf2b5fcc092d77fb7e6dc323f0adde7032252e025c23c9",
+ "sourceLedgerFingerprint": "sha256:2954241d83a1a24feaf00a28c6884cae62c6b138923cd8d2deae23b7dc9c4e2e",
+ "sourceArtifactFingerprint": "sha256:52806e6f474cb0216a8cecb2531649612ef1b87f7381a560d023fd8389fd6f4b",
+ "prerequisites": [
+  {
+   "id": "module.AIModule",
+   "kind": "Module"
+  },
+  {
+   "id": "module.AnimationBlueprintLibrary",
+   "kind": "Module"
+  },
+  {
+   "id": "module.AssetRegistry",
+   "kind": "Module"
+  },
+  {
+   "id": "module.AudioEditor",
+   "kind": "Module"
+  },
+  {
+   "id": "module.EnhancedInput",
+   "kind": "Module"
+  },
+  {
+   "id": "module.GameplayAbilities",
+   "kind": "Module"
+  },
+  {
+   "id": "module.KismetCompiler",
+   "kind": "Module"
+  },
+  {
+   "id": "module.ModelContextProtocolEngine",
+   "kind": "Module"
+  },
+  {
+   "id": "module.NiagaraEditor",
+   "kind": "Module"
+  },
+  {
+   "id": "module.PhysicsAssetEditor",
+   "kind": "Module"
+  },
+  {
+   "id": "module.Sequencer",
+   "kind": "Module"
+  },
+  {
+   "id": "module.StateTreeModule",
+   "kind": "Module"
+  },
+  {
+   "id": "module.ToolsetRegistry",
+   "kind": "Module"
+  },
+  {
+   "id": "module.UMG",
+   "kind": "Module"
+  },
+  {
+   "id": "plugin.ActorModifier",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.Avalanche",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.ChaosClothAssetEditor",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.ControlRig",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.DMXEngine",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.Dataflow",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.DynamicMaterial",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.EditorToolset",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.EnhancedInput",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.GameFeatures",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.GameplayAbilities",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.GameplayBehaviorSmartObjects",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.GameplayBehaviors",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.GameplayInteractions",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.GeometryScripting",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.IKRig",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.Interchange",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.LiveLink",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.MassAI",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.MassGameplay",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.MetaHumanGenerator",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.Metasound",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.ModelContextProtocol",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.ModelViewViewModel",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.MovieRenderPipeline",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.NDisplay",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.Niagara",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.PCG",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.Paper2D",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.PoseSearch",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.PropertyAnimator",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.RemoteControl",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.SmartObjects",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.ToolsetRegistry",
+   "kind": "Plugin"
+  },
+  {
+   "id": "plugin.WorldConditions",
+   "kind": "Plugin"
+  },
+  {
+   "id": "probe.ability_system",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.animation_editor",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.automation_controller",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.behavior_tree",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.blueprint_editor_api",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.dataflow",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.dynamic_material",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.editor_pie",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.editor_validator_subsystem",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.enhanced_input",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.game_framework",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.gameplay_systems",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.geometry_script",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.ik_rig",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.interchange_manager",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.landscape",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.live_editor_toolset",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.live_production_backend",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.live_toolset_registry",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.material_editor",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.metasound",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.navigation_system",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.net_driver",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.niagara_editor",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.paper2d",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.pcg",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.physics_asset",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.pose_search",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.project_index",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.sequencer",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.state_tree",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.widget_blueprint_editor",
+   "kind": "Probe"
+  },
+  {
+   "id": "probe.world_partition",
+   "kind": "Probe"
+  },
+  {
+   "id": "plugin.TextureGraph",
+   "kind": "Plugin"
+  },
+  {
+   "id": "module.TextureGraph",
+   "kind": "Module"
+  },
+  {
+   "id": "probe.texture_graph_engine",
+   "kind": "Probe"
+  }
+ ],
+ "packs": [
+  {
+   "id": "shared_foundation",
+   "tier": "Core",
+   "dependsOn": [],
+   "requirements": [
+    {
+     "id": "epic_endpoint",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.ModelContextProtocol",
+      "plugin.ToolsetRegistry",
+      "module.ModelContextProtocolEngine",
+      "module.ToolsetRegistry",
+      "probe.live_toolset_registry"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_capability_report",
+     "cohort": "cohort.source.hyperaistudionativereadtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:830033c69bcdc7dc4d43195b91fc035b927c3a44f505e7b92e2ed9e1138c1d38",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_plan_validate",
+     "cohort": "cohort.source.hyperaistudioplanvalidatetoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:30d5c421cfdf6814a6694d6bd76b02aba1f1949e59e3c125c068b094a1dede57",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_plan_execute",
+     "cohort": "cohort.source.hyperaistudioplanexecutetoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read",
+      "Edit",
+      "Destructive",
+      "ExternalEffect"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:7042332ea65edaa7c01c8f8a8b7f32cc0075203fcb98a85227679a9092b543f5",
+     "ledgerFingerprint": "sha256:a849b5dea1ec188594e2a40d0f12250fddfa8e757649acf4d4a4ca716175b4a8",
+     "evidence": [
+      0,
+      22,
+      6
+     ]
+    },
+    {
+     "name": "hyper_operation_status",
+     "cohort": "cohort.source.hyperaistudionativereadtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:830033c69bcdc7dc4d43195b91fc035b927c3a44f505e7b92e2ed9e1138c1d38",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_batch_query",
+     "cohort": "cohort.source.hyperaistudiocontextsearchtoolsets.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:4ff88532c9e6c2966d7fe98ad73d90d69689fc73c95d5a4572cdae7fdaa16663",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ],
+   "cohortOrder": [
+    "cohort.source.hyperaistudiocontextsearchtoolsets.v1",
+    "cohort.source.hyperaistudionativereadtoolset.v1",
+    "cohort.source.hyperaistudioplanexecutetoolset.v1",
+    "cohort.source.hyperaistudioplanvalidatetoolset.v1"
+   ]
+  },
+  {
+   "id": "context_scene_project_search",
+   "tier": "Core",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "editor_context",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.EditorToolset",
+      "module.AssetRegistry",
+      "probe.live_editor_toolset",
+      "probe.project_index"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_context_snapshot",
+     "cohort": "cohort.source.hyperaistudiocontextsearchtoolsets.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:4ff88532c9e6c2966d7fe98ad73d90d69689fc73c95d5a4572cdae7fdaa16663",
+     "ledgerFingerprint": "sha256:4979a5d040241fd2477e50b55083f8c29dc6005a329bf931e8801e920f3903ce",
+     "evidence": [
+      0,
+      3,
+      0
+     ]
+    },
+    {
+     "name": "hyper_scene_inspect",
+     "cohort": "cohort.source.hyperaistudiocontextsearchtoolsets.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:4ff88532c9e6c2966d7fe98ad73d90d69689fc73c95d5a4572cdae7fdaa16663",
+     "ledgerFingerprint": "sha256:a4d27c173bc51762d0d688b2d100172a4f92a12d9308eee77588f38c28c9a5c2",
+     "evidence": [
+      0,
+      47,
+      5
+     ]
+    },
+    {
+     "name": "hyper_scene_apply_plan",
+     "cohort": "cohort.source.hyperaistudiocontextsearchtoolsets.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit",
+      "Destructive"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:4ff88532c9e6c2966d7fe98ad73d90d69689fc73c95d5a4572cdae7fdaa16663",
+     "ledgerFingerprint": "sha256:5380128e792ee8eb4fb6720d58b5206910dd423b81b81ab9e1d29ac172144618",
+     "evidence": [
+      0,
+      31,
+      8
+     ]
+    },
+    {
+     "name": "hyper_scene_validate",
+     "cohort": "cohort.source.hyperaistudiocontextsearchtoolsets.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:4ff88532c9e6c2966d7fe98ad73d90d69689fc73c95d5a4572cdae7fdaa16663",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_project_search",
+     "cohort": "cohort.source.hyperaistudiocontextsearchtoolsets.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:4ff88532c9e6c2966d7fe98ad73d90d69689fc73c95d5a4572cdae7fdaa16663",
+     "ledgerFingerprint": "sha256:29e9a4ea6f0d16bb082f37b97b3903060c5a735357ae63937e2539711f48b098",
+     "evidence": [
+      0,
+      30,
+      3
+     ]
+    },
+    {
+     "name": "hyper_project_index_status",
+     "cohort": "cohort.source.hyperaistudiocontextsearchtoolsets.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:4ff88532c9e6c2966d7fe98ad73d90d69689fc73c95d5a4572cdae7fdaa16663",
+     "ledgerFingerprint": "sha256:a131d6d7f5d3ca5b02ace28778b6a06623b01162c2375ebb8c9fe68f0db4e434",
+     "evidence": [
+      0,
+      1,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "id": "blueprint",
+   "tier": "Core",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "blueprint_editor",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.EditorToolset",
+      "module.KismetCompiler",
+      "probe.blueprint_editor_api"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_blueprint_snapshot",
+     "cohort": "cohort.source.hyperaistudioblueprintworkflowtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:a720973ecd58e9c4a44cf2f8d920de8e0a0ee7224649183e78824e2a139ec2ce",
+     "ledgerFingerprint": "sha256:3129e9a76c3b80414df28a86ca4a398680dfbb2897d054efad774aac6888f698",
+     "evidence": [
+      0,
+      24,
+      8
+     ]
+    },
+    {
+     "name": "hyper_blueprint_discover_actions",
+     "cohort": "cohort.source.hyperaistudioblueprintworkflowtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:a720973ecd58e9c4a44cf2f8d920de8e0a0ee7224649183e78824e2a139ec2ce",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_blueprint_validate_patch",
+     "cohort": "cohort.source.hyperaistudioblueprintworkflowtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:a720973ecd58e9c4a44cf2f8d920de8e0a0ee7224649183e78824e2a139ec2ce",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_blueprint_apply_patch",
+     "cohort": "cohort.source.hyperaistudioblueprintworkflowtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit",
+      "Destructive"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:a720973ecd58e9c4a44cf2f8d920de8e0a0ee7224649183e78824e2a139ec2ce",
+     "ledgerFingerprint": "sha256:d12d12ad5905ff345c1b542f5bd3652ef52542fe27d5274fe75c3b6dd8841e84",
+     "evidence": [
+      0,
+      28,
+      18
+     ]
+    },
+    {
+     "name": "hyper_blueprint_build_batch",
+     "cohort": "cohort.source.hyperaistudioblueprintworkflowtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:a720973ecd58e9c4a44cf2f8d920de8e0a0ee7224649183e78824e2a139ec2ce",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_blueprint_compile_validate",
+     "cohort": "cohort.source.hyperaistudioblueprintworkflowtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read",
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:a720973ecd58e9c4a44cf2f8d920de8e0a0ee7224649183e78824e2a139ec2ce",
+     "ledgerFingerprint": "sha256:7f0ba17adeb6c4e76b4acca27d39734177966636b8e13ba43c735511334d8e39",
+     "evidence": [
+      0,
+      4,
+      4
+     ]
+    },
+    {
+     "name": "hyper_blueprint_debug_inspect",
+     "cohort": "cohort.source.hyperaistudionativereadtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:830033c69bcdc7dc4d43195b91fc035b927c3a44f505e7b92e2ed9e1138c1d38",
+     "ledgerFingerprint": "sha256:5442426aa3dc87c2c2c9518719c1a19b319e1c00284232ac66931ee59098b79b",
+     "evidence": [
+      0,
+      0,
+      1
+     ]
+    },
+    {
+     "name": "hyper_blueprint_repair",
+     "cohort": "cohort.source.hyperaistudioblueprintworkflowtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit",
+      "Destructive"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:a720973ecd58e9c4a44cf2f8d920de8e0a0ee7224649183e78824e2a139ec2ce",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_blueprint_diff",
+     "cohort": "cohort.source.hyperaistudioblueprintworkflowtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:a720973ecd58e9c4a44cf2f8d920de8e0a0ee7224649183e78824e2a139ec2ce",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_blueprint_layout",
+     "cohort": "cohort.source.hyperaistudioblueprintworkflowtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:a720973ecd58e9c4a44cf2f8d920de8e0a0ee7224649183e78824e2a139ec2ce",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "diagnostics",
+   "tier": "Core",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "diagnostic_services",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "module.AssetRegistry",
+      "probe.editor_validator_subsystem"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_diagnose",
+     "cohort": "cohort.source.hyperaistudiodiagnosetoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:d6e056343d803d8feb9b966325d42e32e00c68ad8a641bde3f64de6c309e7807",
+     "ledgerFingerprint": "sha256:afc6cc12969644b1bdef68cb941d2fc2ad0ab3563573c416193dbd4e7e4e4dea",
+     "evidence": [
+      0,
+      29,
+      6
+     ]
+    },
+    {
+     "name": "hyper_run_audit",
+     "cohort": "cohort.source.hyperaistudioaudittoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:7424e0fb088f00e7bf9ecdb32e6fa1b47fc2a387e5c8afdb336a19ba405259f5",
+     "ledgerFingerprint": "sha256:46672b2943b9f7b587885f8562f69eef93db4c56caf7fbc6a56fed71696a89f7",
+     "evidence": [
+      0,
+      10,
+      4
+     ]
+    },
+    {
+     "name": "hyper_asset_dependency_graph",
+     "cohort": "cohort.source.hyperaistudiodependencygraphtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:429cf4764d7c20ecb23284079a2809d189989cf97c7cd6329af4ec53e8c5332b",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_log_tail",
+     "cohort": "cohort.source.hyperaistudiologtailtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:167d1b34d4b2113ed04e86cb8c1de9a05603d9cc4edf3d8466d3c760e0b87326",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_viewport_capture",
+     "cohort": "cohort.source.hyperaistudioviewportcapturetoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "ExternalEffect"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:0ab0b4f9df6f5f7ad10eaef4e65b826cef2cce3e36af04aad4fa39f2800b4485",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ],
+   "cohortOrder": [
+    "cohort.source.hyperaistudioaudittoolset.v1",
+    "cohort.source.hyperaistudiodependencygraphtoolset.v1",
+    "cohort.source.hyperaistudiodiagnosetoolset.v1",
+    "cohort.source.hyperaistudiologtailtoolset.v1",
+    "cohort.source.hyperaistudioviewportcapturetoolset.v1"
+   ]
+  },
+  {
+   "id": "pie_runtime",
+   "tier": "Core",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "pie",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.editor_pie"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_playtest_run",
+     "cohort": "cohort.source.hyperaistudiopieplaytesttoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "ExternalEffect"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:14d6c69b8792d81339cc48329f222ef83b95880a327cf73862ebae517eef50ca",
+     "ledgerFingerprint": "sha256:70926a046a49e8208006443dc1df511d067fd3ea86acc101aa7848aa08066b58",
+     "evidence": [
+      0,
+      0,
+      10
+     ]
+    },
+    {
+     "name": "hyper_pie_query",
+     "cohort": "cohort.source.hyperaistudionativereadtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:830033c69bcdc7dc4d43195b91fc035b927c3a44f505e7b92e2ed9e1138c1d38",
+     "ledgerFingerprint": "sha256:820b858399688029dc1d4c128e5e074f5dd3079de48bd1c7f83d58035d02cafe",
+     "evidence": [
+      0,
+      1,
+      5
+     ]
+    },
+    {
+     "name": "hyper_playtest_status",
+     "cohort": "cohort.source.hyperaistudiopieplaytesttoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:14d6c69b8792d81339cc48329f222ef83b95880a327cf73862ebae517eef50ca",
+     "ledgerFingerprint": "sha256:12e11bb072015d122135268ce73b18656a01d103e460a238c21b6cb3c988f8bc",
+     "evidence": [
+      0,
+      0,
+      1
+     ]
+    }
+   ],
+   "cohortOrder": [
+    "cohort.source.hyperaistudionativereadtoolset.v1",
+    "cohort.source.hyperaistudiopieplaytesttoolset.v1"
+   ]
+  },
+  {
+   "id": "enhanced_input",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "enhanced_input",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.EnhancedInput",
+      "module.EnhancedInput",
+      "probe.enhanced_input"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_input_inspect",
+     "cohort": "cohort.source.hyperaistudioenhancedinputtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:bbee351b0b01f38c068322c7759d5e421f7a982c6074511a340bdcecee5715fe",
+     "ledgerFingerprint": "sha256:4528b47654a131991cf3363037d13a76eb0e7d48c87bd2828acc3abe0e38b42f",
+     "evidence": [
+      0,
+      1,
+      2
+     ]
+    },
+    {
+     "name": "hyper_input_apply_plan",
+     "cohort": "cohort.source.hyperaistudioenhancedinputtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit",
+      "Destructive"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:bbee351b0b01f38c068322c7759d5e421f7a982c6074511a340bdcecee5715fe",
+     "ledgerFingerprint": "sha256:c4a1f8c671635171bf2a44f2228db681bfcd691daccef0285dd9fe29dbdb83ef",
+     "evidence": [
+      0,
+      4,
+      4
+     ]
+    },
+    {
+     "name": "hyper_input_validate",
+     "cohort": "cohort.source.hyperaistudioenhancedinputtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:bbee351b0b01f38c068322c7759d5e421f7a982c6074511a340bdcecee5715fe",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "gameplay_ai",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "ai_module",
+     "mode": "AnyOf",
+     "blocking": true,
+     "prerequisites": [
+      "module.AIModule",
+      "module.StateTreeModule"
+     ]
+    },
+    {
+     "id": "ai_backend",
+     "mode": "AnyOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.behavior_tree",
+      "probe.state_tree"
+     ]
+    },
+    {
+     "id": "ai_behavior_bridge_variant",
+     "mode": "AnyOf",
+     "blocking": false,
+     "prerequisites": [
+      "plugin.SmartObjects",
+      "plugin.GameplayBehaviors",
+      "plugin.GameplayBehaviorSmartObjects",
+      "plugin.GameplayInteractions"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_gameplay_ai_inspect",
+     "cohort": "cohort.source.hyperaistudiogameplayaitoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:04c849c4111792fcc9e4c9799635c0d2300cef0357c26e9cc08939225d87ac45",
+     "ledgerFingerprint": "sha256:9223d73cba000cea35d355c2b1bf695ff09106be97969e21a3fbec14c85a44cd",
+     "evidence": [
+      0,
+      0,
+      8
+     ]
+    },
+    {
+     "name": "hyper_gameplay_ai_apply_plan",
+     "cohort": "cohort.source.hyperaistudiogameplayaitoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:04c849c4111792fcc9e4c9799635c0d2300cef0357c26e9cc08939225d87ac45",
+     "ledgerFingerprint": "sha256:668ff689bf86bf25e3b5d1b67f7dab979ff5ae903d295d62ddebd51fd195443c",
+     "evidence": [
+      0,
+      10,
+      6
+     ]
+    },
+    {
+     "name": "hyper_gameplay_ai_validate",
+     "cohort": "cohort.source.hyperaistudiogameplayaitoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:04c849c4111792fcc9e4c9799635c0d2300cef0357c26e9cc08939225d87ac45",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "gas",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "gas",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.GameplayAbilities",
+      "module.GameplayAbilities",
+      "probe.ability_system"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_gas_inspect",
+     "cohort": "cohort.source.hyperaistudiogastoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:24f5f37a3386ec4ee82f85e1e5a81130be7c9d5b009d3f4ae74719bcf6e6a476",
+     "ledgerFingerprint": "sha256:34f0670507cf0f0a1fa871430f5884f327ecd2dfe24d0793d5c318e4a7a16b21",
+     "evidence": [
+      0,
+      0,
+      5
+     ]
+    },
+    {
+     "name": "hyper_gas_apply_plan",
+     "cohort": "cohort.source.hyperaistudiogastoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:24f5f37a3386ec4ee82f85e1e5a81130be7c9d5b009d3f4ae74719bcf6e6a476",
+     "ledgerFingerprint": "sha256:243ea57369d8a71ec689dd3aa500b44e321f51d9ffead17f43b282efb9cb3c6d",
+     "evidence": [
+      0,
+      3,
+      3
+     ]
+    },
+    {
+     "name": "hyper_gas_validate",
+     "cohort": "cohort.source.hyperaistudiogastoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:24f5f37a3386ec4ee82f85e1e5a81130be7c9d5b009d3f4ae74719bcf6e6a476",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "animation_rigging",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "animation_plugin",
+     "mode": "AnyOf",
+     "blocking": true,
+     "prerequisites": [
+      "module.AnimationBlueprintLibrary",
+      "plugin.ControlRig",
+      "plugin.IKRig",
+      "plugin.PoseSearch"
+     ]
+    },
+    {
+     "id": "animation_backend",
+     "mode": "AnyOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.animation_editor",
+      "probe.ik_rig",
+      "probe.pose_search"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_animation_inspect",
+     "cohort": "cohort.source.hyperaistudioanimationtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:9585fad662b603a46ff29089a4f1a037b34bcf935a4de2614cf323c81d5aaed2",
+     "ledgerFingerprint": "sha256:c0f12a8fb154887ff2f717a55ef3aa1ff1824224803ac280df0abca14d442920",
+     "evidence": [
+      0,
+      16,
+      10
+     ]
+    },
+    {
+     "name": "hyper_animation_apply_plan",
+     "cohort": "cohort.source.hyperaistudioanimationtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit",
+      "Destructive"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:9585fad662b603a46ff29089a4f1a037b34bcf935a4de2614cf323c81d5aaed2",
+     "ledgerFingerprint": "sha256:68e3cc52c7853d93f7da208247f837fc81aed738ffc74c328920a943922c5f87",
+     "evidence": [
+      0,
+      33,
+      15
+     ]
+    },
+    {
+     "name": "hyper_animation_validate",
+     "cohort": "cohort.source.hyperaistudioanimationtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:9585fad662b603a46ff29089a4f1a037b34bcf935a4de2614cf323c81d5aaed2",
+     "ledgerFingerprint": "sha256:26afe07f654aaf7b594a0ba93097faa6cb9aef8fc7750de8ab1106cd7e849970",
+     "evidence": [
+      0,
+      1,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "worldbuilding_navigation",
+   "tier": "Core",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "world_backend",
+     "mode": "AnyOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.world_partition",
+      "probe.landscape",
+      "probe.navigation_system"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_worldbuilding_inspect",
+     "cohort": "cohort.source.hyperaistudioworldbuildingtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:bc2c4c70f2f5d960d2a5153af7a1ecb614f3ba90493ff0bdc67f7bc694a04ec0",
+     "ledgerFingerprint": "sha256:2564246ea88ebaa91a086b2dc1f3be0d071e7e8cbbd231b7bc3614a230f02e86",
+     "evidence": [
+      0,
+      7,
+      10
+     ]
+    },
+    {
+     "name": "hyper_worldbuilding_apply_plan",
+     "cohort": "cohort.source.hyperaistudioworldbuildingtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit",
+      "Destructive"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:bc2c4c70f2f5d960d2a5153af7a1ecb614f3ba90493ff0bdc67f7bc694a04ec0",
+     "ledgerFingerprint": "sha256:4c7dadb01dd6b70eca18971bf94402ed3650c998043fa8459b5404af6176da16",
+     "evidence": [
+      0,
+      13,
+      20
+     ]
+    },
+    {
+     "name": "hyper_worldbuilding_validate",
+     "cohort": "cohort.source.hyperaistudioworldbuildingtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:bc2c4c70f2f5d960d2a5153af7a1ecb614f3ba90493ff0bdc67f7bc694a04ec0",
+     "ledgerFingerprint": "sha256:5166dc6e538529fc87d71db5d01a8105f760bc9af9f3edce9bd4a86de246d1c8",
+     "evidence": [
+      0,
+      1,
+      0
+     ]
+    },
+    {
+     "name": "hyper_navigation_inspect",
+     "cohort": "cohort.source.hyperaistudioworldbuildingtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:bc2c4c70f2f5d960d2a5153af7a1ecb614f3ba90493ff0bdc67f7bc694a04ec0",
+     "ledgerFingerprint": "sha256:4de2a8a844a70bba97552464094e0a72322510d1e475cf8255788f18e89c9a35",
+     "evidence": [
+      0,
+      0,
+      2
+     ]
+    },
+    {
+     "name": "hyper_navigation_apply_plan",
+     "cohort": "cohort.source.hyperaistudioworldbuildingtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:bc2c4c70f2f5d960d2a5153af7a1ecb614f3ba90493ff0bdc67f7bc694a04ec0",
+     "ledgerFingerprint": "sha256:f00590c45abbf31a46cf728b57d0264ad94419772a436ee9db46770d83327fb8",
+     "evidence": [
+      0,
+      1,
+      0
+     ]
+    },
+    {
+     "name": "hyper_navigation_validate",
+     "cohort": "cohort.source.hyperaistudioworldbuildingtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:bc2c4c70f2f5d960d2a5153af7a1ecb614f3ba90493ff0bdc67f7bc694a04ec0",
+     "ledgerFingerprint": "sha256:adb8b400d3d08ba453a45d3edab00d02c1864809cdef6e5502d3d5fff650edfd",
+     "evidence": [
+      0,
+      0,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "id": "networking_game_framework",
+   "tier": "Core",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "framework_backend",
+     "mode": "AnyOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.net_driver",
+      "probe.game_framework"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_network_inspect",
+     "cohort": "cohort.source.hyperaistudionetworkingtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:b48230fe22b2d331740662f6da7409cfde5138865d2ed8ac49c20d8bc83e3091",
+     "ledgerFingerprint": "sha256:b3d328e7f4ca3c5e913d03979224ace41647f17c502dea573d4f409019a19111",
+     "evidence": [
+      0,
+      3,
+      1
+     ]
+    },
+    {
+     "name": "hyper_network_apply_plan",
+     "cohort": "cohort.source.hyperaistudionetworkingtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:b48230fe22b2d331740662f6da7409cfde5138865d2ed8ac49c20d8bc83e3091",
+     "ledgerFingerprint": "sha256:c9084fa8f38bc64e727ea3b0037e49c6a41c02b2366f40bda51db8f4feb901c0",
+     "evidence": [
+      0,
+      5,
+      2
+     ]
+    },
+    {
+     "name": "hyper_network_validate",
+     "cohort": "cohort.source.hyperaistudionetworkingtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:b48230fe22b2d331740662f6da7409cfde5138865d2ed8ac49c20d8bc83e3091",
+     "ledgerFingerprint": "sha256:4fd76565686e6786da542db85fa3255c5dbd69599f235e349316f83aecacd799",
+     "evidence": [
+      0,
+      1,
+      0
+     ]
+    },
+    {
+     "name": "hyper_game_framework_inspect",
+     "cohort": "cohort.source.hyperaistudionetworkingtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:b48230fe22b2d331740662f6da7409cfde5138865d2ed8ac49c20d8bc83e3091",
+     "ledgerFingerprint": "sha256:2649e4f87a8fdd7817d64f868051be28ae07aed47d897464173c09c34fe68fdc",
+     "evidence": [
+      0,
+      0,
+      2
+     ]
+    },
+    {
+     "name": "hyper_game_framework_apply_plan",
+     "cohort": "cohort.source.hyperaistudionetworkingtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:b48230fe22b2d331740662f6da7409cfde5138865d2ed8ac49c20d8bc83e3091",
+     "ledgerFingerprint": "sha256:b5d6c76c633980f40ae3bd8a7fffaa477643d4fb9f09f80d8367ba819370a21f",
+     "evidence": [
+      0,
+      2,
+      6
+     ]
+    },
+    {
+     "name": "hyper_game_framework_validate",
+     "cohort": "cohort.source.hyperaistudionetworkingtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:b48230fe22b2d331740662f6da7409cfde5138865d2ed8ac49c20d8bc83e3091",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "audio_metasound",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "audio_plugin",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.Metasound"
+     ]
+    },
+    {
+     "id": "audio_backend",
+     "mode": "AnyOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.metasound"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_audio_inspect",
+     "cohort": "cohort.source.hyperaistudioaudiotoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:ec1bc3f56a3d062513c41d1276e89ab8a1939750a65901e7e5c187b8c5b8f0cc",
+     "ledgerFingerprint": "sha256:c327ea4e6da3518e6384bc71a72b13240477c8fd4e14acc78a8d31817e7c3478",
+     "evidence": [
+      0,
+      1,
+      13
+     ]
+    },
+    {
+     "name": "hyper_audio_apply_plan",
+     "cohort": "cohort.source.hyperaistudioaudiotoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "ExternalEffect"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:ec1bc3f56a3d062513c41d1276e89ab8a1939750a65901e7e5c187b8c5b8f0cc",
+     "ledgerFingerprint": "sha256:cc0b2bad4a0da932bb77af6a666d985bb1f75d0eade2d27e682943e00f98db8d",
+     "evidence": [
+      0,
+      11,
+      2
+     ]
+    },
+    {
+     "name": "hyper_audio_validate",
+     "cohort": "cohort.source.hyperaistudioaudiotoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:ec1bc3f56a3d062513c41d1276e89ab8a1939750a65901e7e5c187b8c5b8f0cc",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "materials_dynamic_material",
+   "tier": "Core",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "material_editor",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.EditorToolset",
+      "probe.material_editor"
+     ]
+    },
+    {
+     "id": "dynamic_material_variant",
+     "mode": "AllOf",
+     "blocking": false,
+     "prerequisites": [
+      "plugin.DynamicMaterial",
+      "probe.dynamic_material"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_material_inspect",
+     "cohort": "cohort.source.hyperaistudiomaterialstoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:d28d599b9b1f70afd75d0a3c6ff191914065acca811b03c4e866100506b9197a",
+     "ledgerFingerprint": "sha256:dc713a98232ac065489b4d19ee836273f0d82321f6afb9f6c80c19be65d08548",
+     "evidence": [
+      0,
+      13,
+      7
+     ]
+    },
+    {
+     "name": "hyper_material_apply_plan",
+     "cohort": "cohort.source.hyperaistudiomaterialstoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit",
+      "Destructive"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:d28d599b9b1f70afd75d0a3c6ff191914065acca811b03c4e866100506b9197a",
+     "ledgerFingerprint": "sha256:017be41c3a77a380dd85cda4d04bad3c37ab8257ce5d1eb541153468c4ebb8f9",
+     "evidence": [
+      0,
+      14,
+      9
+     ]
+    },
+    {
+     "name": "hyper_material_validate",
+     "cohort": "cohort.source.hyperaistudiomaterialstoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:d28d599b9b1f70afd75d0a3c6ff191914065acca811b03c4e866100506b9197a",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_dynamic_material_inspect",
+     "cohort": "cohort.source.hyperaistudiodynamicmaterialtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "nonBlockingGroups": [
+      "dynamic_material_variant"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:a92e4c704ecb66d6e3eb1a30ecbd4d0c7ad620cea4194a4966845e5e33207db7",
+     "ledgerFingerprint": "sha256:243cebda8e4c4d6d67f12b3c78089e825067c6e876f5ab1707a23f61a45d892f",
+     "evidence": [
+      0,
+      0,
+      2
+     ]
+    },
+    {
+     "name": "hyper_dynamic_material_apply_plan",
+     "cohort": "cohort.source.hyperaistudiodynamicmaterialtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "nonBlockingGroups": [
+      "dynamic_material_variant"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:a92e4c704ecb66d6e3eb1a30ecbd4d0c7ad620cea4194a4966845e5e33207db7",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_dynamic_material_validate",
+     "cohort": "cohort.source.hyperaistudiodynamicmaterialtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "nonBlockingGroups": [
+      "dynamic_material_variant"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:a92e4c704ecb66d6e3eb1a30ecbd4d0c7ad620cea4194a4966845e5e33207db7",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ],
+   "cohortOrder": [
+    "cohort.source.hyperaistudiodynamicmaterialtoolset.v1",
+    "cohort.source.hyperaistudiomaterialstoolset.v1"
+   ]
+  },
+  {
+   "id": "niagara_vfx",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "niagara_plugin",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.Niagara",
+      "module.NiagaraEditor"
+     ]
+    },
+    {
+     "id": "niagara_backend",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.niagara_editor"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_niagara_inspect",
+     "cohort": "cohort.source.hyperaistudioniagaratoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:cb61dd8ced7df818bff3a5603895994a1f939539d741265136b0020c66dfcd3c",
+     "ledgerFingerprint": "sha256:8b11228cfe6af661119d604180dc8972cc77fa357f52cd345e5b9cfcb57521bb",
+     "evidence": [
+      0,
+      3,
+      3
+     ]
+    },
+    {
+     "name": "hyper_niagara_apply_plan",
+     "cohort": "cohort.source.hyperaistudioniagaratoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:cb61dd8ced7df818bff3a5603895994a1f939539d741265136b0020c66dfcd3c",
+     "ledgerFingerprint": "sha256:1cae9a5d431c2f9a663e87f9e1715d7aea2579e6970361cd102af6b231bcc6da",
+     "evidence": [
+      0,
+      8,
+      3
+     ]
+    },
+    {
+     "name": "hyper_niagara_validate",
+     "cohort": "cohort.source.hyperaistudioniagaratoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:cb61dd8ced7df818bff3a5603895994a1f939539d741265136b0020c66dfcd3c",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "texture_graph",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "texture_graph_plugin",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.TextureGraph",
+      "module.TextureGraph"
+     ]
+    },
+    {
+     "id": "texture_graph_backend",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.texture_graph_engine"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_texture_graph_inspect",
+     "cohort": "cohort.source.hyperaistudiotexturegraphtoolset.v1",
+     "safety": [
+      "Read"
+     ]
+    },
+    {
+     "name": "hyper_texture_graph_apply_plan",
+     "cohort": "cohort.source.hyperaistudiotexturegraphtoolset.v1",
+     "safety": [
+      "Edit"
+     ]
+    },
+    {
+     "name": "hyper_texture_graph_validate",
+     "cohort": "cohort.source.hyperaistudiotexturegraphtoolset.v1",
+     "safety": [
+      "Read"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "pcg",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "pcg",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.PCG",
+      "probe.pcg"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_pcg_inspect",
+     "cohort": "cohort.source.hyperaistudiopcgtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:8be728c42721d9150f9bf7cd102c2d69ac037b4214b7ba690867307e9706d362",
+     "ledgerFingerprint": "sha256:4118ae0b7d7362c67f96c643c4498b1c5033037d3bce9b81f1f5f947c9ea6ba6",
+     "evidence": [
+      0,
+      2,
+      3
+     ]
+    },
+    {
+     "name": "hyper_pcg_apply_plan",
+     "cohort": "cohort.source.hyperaistudiopcgtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "ExternalEffect"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:8be728c42721d9150f9bf7cd102c2d69ac037b4214b7ba690867307e9706d362",
+     "ledgerFingerprint": "sha256:7b628ea21b4ae2f1db14afc59ae5740a9a422e67f2304a6951d4d4e8865a604d",
+     "evidence": [
+      0,
+      6,
+      3
+     ]
+    },
+    {
+     "name": "hyper_pcg_validate",
+     "cohort": "cohort.source.hyperaistudiopcgtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:8be728c42721d9150f9bf7cd102c2d69ac037b4214b7ba690867307e9706d362",
+     "ledgerFingerprint": "sha256:455c6de07902e905fc1c2b2196e199cb20b376558ed7f0d38b930ae249d6ed3b",
+     "evidence": [
+      0,
+      1,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "id": "ui_slate_mvvm",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "ui_plugin",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "module.UMG",
+      "plugin.ModelViewViewModel"
+     ]
+    },
+    {
+     "id": "ui_backend",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.widget_blueprint_editor"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_ui_inspect",
+     "cohort": "cohort.source.hyperaistudiouitoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:7cd531f2b7de4e86f3ef14c4e83dc85ec707a6e59e5b8f60a7064370b2896702",
+     "ledgerFingerprint": "sha256:63813ff4c834fa7d38289244f33d0a72cbb85cc290fff8c2780eefa377514265",
+     "evidence": [
+      0,
+      8,
+      5
+     ]
+    },
+    {
+     "name": "hyper_ui_apply_plan",
+     "cohort": "cohort.source.hyperaistudiouitoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit",
+      "Destructive"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:7cd531f2b7de4e86f3ef14c4e83dc85ec707a6e59e5b8f60a7064370b2896702",
+     "ledgerFingerprint": "sha256:3996783d60b2ab6d789b3369910ad0dc6aad585521d7c39ff7dd417368e742f6",
+     "evidence": [
+      0,
+      18,
+      3
+     ]
+    },
+    {
+     "name": "hyper_ui_validate",
+     "cohort": "cohort.source.hyperaistudiouitoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:7cd531f2b7de4e86f3ef14c4e83dc85ec707a6e59e5b8f60a7064370b2896702",
+     "ledgerFingerprint": "sha256:ed9d67c800e1eca3cb2c2422b62b68f187661a296b5dfa911c15c4144408980b",
+     "evidence": [
+      0,
+      0,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "id": "cinematics",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "cinematics_plugin",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "module.Sequencer",
+      "plugin.MovieRenderPipeline"
+     ]
+    },
+    {
+     "id": "cinematics_backend",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.sequencer"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_cinematics_inspect",
+     "cohort": "cohort.source.hyperaistudiocinematicstoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:75370d8d61600dd067b683734148ff2aa89de7ae21523812b5fa1ada920874b7",
+     "ledgerFingerprint": "sha256:9898651a976e855a8d569511ae1ef9605a408426bdc09e4d335f97c7cfc116cc",
+     "evidence": [
+      0,
+      1,
+      5
+     ]
+    },
+    {
+     "name": "hyper_cinematics_apply_plan",
+     "cohort": "cohort.source.hyperaistudiocinematicstoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "ExternalEffect"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:75370d8d61600dd067b683734148ff2aa89de7ae21523812b5fa1ada920874b7",
+     "ledgerFingerprint": "sha256:bc9a1434cf31618a1bbb6839231b2ca20b3c031361a7031d19e7a1dab4b76537",
+     "evidence": [
+      0,
+      8,
+      5
+     ]
+    },
+    {
+     "name": "hyper_cinematics_validate",
+     "cohort": "cohort.source.hyperaistudiocinematicstoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:75370d8d61600dd067b683734148ff2aa89de7ae21523812b5fa1ada920874b7",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "data_config_localization",
+   "tier": "Core",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "data",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "module.AssetRegistry"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_data_inspect",
+     "cohort": "cohort.source.hyperaistudiodatatoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:86379659c72160ee254805ee6a96cdfdfc23b7506f5000ff83fb3c37fea5fad5",
+     "ledgerFingerprint": "sha256:8657dd2a661e18fa6bfc361321017994b1b37d5d672428bb87ea32062ceb372c",
+     "evidence": [
+      0,
+      5,
+      3
+     ]
+    },
+    {
+     "name": "hyper_data_apply_plan",
+     "cohort": "cohort.source.hyperaistudiodatatoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit",
+      "Destructive"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:86379659c72160ee254805ee6a96cdfdfc23b7506f5000ff83fb3c37fea5fad5",
+     "ledgerFingerprint": "sha256:276bcaae308c4fa83fb44868d538a5cef93ae87490fcc74839f36bcc632f3b99",
+     "evidence": [
+      0,
+      0,
+      2
+     ]
+    },
+    {
+     "name": "hyper_data_validate",
+     "cohort": "cohort.source.hyperaistudiodatatoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:86379659c72160ee254805ee6a96cdfdfc23b7506f5000ff83fb3c37fea5fad5",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "physics_chaos",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "physics_plugin",
+     "mode": "AnyOf",
+     "blocking": true,
+     "prerequisites": [
+      "module.PhysicsAssetEditor",
+      "plugin.ChaosClothAssetEditor"
+     ]
+    },
+    {
+     "id": "physics_backend",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.physics_asset"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_physics_inspect",
+     "cohort": "cohort.source.hyperaistudiophysicstoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:90ff58d7e9ca7c8550a6820a5d2fbf398579916c717db9a67fff075d0cf999db",
+     "ledgerFingerprint": "sha256:c1fb8e69271051cd96622275f7b6b6b925bed2dd02a4663a7c41c41516786cea",
+     "evidence": [
+      0,
+      4,
+      3
+     ]
+    },
+    {
+     "name": "hyper_physics_apply_plan",
+     "cohort": "cohort.source.hyperaistudiophysicstoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:90ff58d7e9ca7c8550a6820a5d2fbf398579916c717db9a67fff075d0cf999db",
+     "ledgerFingerprint": "sha256:59ece325874d9ea61a7d3168d50d5505960e121a4892f39d6847ee99d08d3bff",
+     "evidence": [
+      0,
+      12,
+      3
+     ]
+    },
+    {
+     "name": "hyper_physics_validate",
+     "cohort": "cohort.source.hyperaistudiophysicstoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:90ff58d7e9ca7c8550a6820a5d2fbf398579916c717db9a67fff075d0cf999db",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "geometry_interchange",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "geometry_plugin",
+     "mode": "AnyOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.GeometryScripting",
+      "plugin.Dataflow",
+      "plugin.Interchange"
+     ]
+    },
+    {
+     "id": "geometry_backend",
+     "mode": "AnyOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.geometry_script",
+      "probe.dataflow",
+      "probe.interchange_manager"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_geometry_inspect",
+     "cohort": "cohort.source.hyperaistudiogeometrytoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:dd3dd285db4738bd6329651909f89a6bc4aa7cbf44beb86c0cc54b618a4ae516",
+     "ledgerFingerprint": "sha256:1229976b1ada9914f5a778d3e6e3c1e7e4aa7438a6b83498bcefc9b7bc5a543c",
+     "evidence": [
+      0,
+      3,
+      2
+     ]
+    },
+    {
+     "name": "hyper_geometry_apply_plan",
+     "cohort": "cohort.source.hyperaistudiogeometrytoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:dd3dd285db4738bd6329651909f89a6bc4aa7cbf44beb86c0cc54b618a4ae516",
+     "ledgerFingerprint": "sha256:6e95824a9609d33f63ab9cb47d99e4f5ec15d9afacc23db5afe1554fd4da3be7",
+     "evidence": [
+      0,
+      4,
+      0
+     ]
+    },
+    {
+     "name": "hyper_geometry_validate",
+     "cohort": "cohort.source.hyperaistudiogeometrytoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:dd3dd285db4738bd6329651909f89a6bc4aa7cbf44beb86c0cc54b618a4ae516",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_interchange_inspect",
+     "cohort": "cohort.source.hyperaistudiointerchangetoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:3614e6c3233ed77c4b45042af8a61586c806e2f7cb946862e0e5f0f1f1982271",
+     "ledgerFingerprint": "sha256:29ffd76b0ccab649cd95d3aadbeeee2d41eec4004915f2494c083b3a8de68aeb",
+     "evidence": [
+      0,
+      1,
+      1
+     ]
+    },
+    {
+     "name": "hyper_interchange_apply_plan",
+     "cohort": "cohort.source.hyperaistudiointerchangetoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "ExternalEffect"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:3614e6c3233ed77c4b45042af8a61586c806e2f7cb946862e0e5f0f1f1982271",
+     "ledgerFingerprint": "sha256:95d75e0f3f6048751a8c6b2c3a45dbb606b934a736048995b51cea154b8b41ac",
+     "evidence": [
+      0,
+      1,
+      0
+     ]
+    },
+    {
+     "name": "hyper_interchange_validate",
+     "cohort": "cohort.source.hyperaistudiointerchangetoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:3614e6c3233ed77c4b45042af8a61586c806e2f7cb946862e0e5f0f1f1982271",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "live_production",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "live_production_plugin",
+     "mode": "AnyOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.LiveLink",
+      "plugin.RemoteControl",
+      "plugin.DMXEngine",
+      "plugin.Avalanche",
+      "plugin.NDisplay"
+     ]
+    },
+    {
+     "id": "live_production_backend",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.live_production_backend"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_live_production_inspect",
+     "cohort": "cohort.source.hyperaistudioliveproductiontoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:23be49949668d0990632165823b655dc334a223b0bccc87f8bd498b8d3d05cfb",
+     "ledgerFingerprint": "sha256:3ed58eecb89bdb39c2cfc71db94aa7643b156176d035646d094793e2f34a49c4",
+     "evidence": [
+      0,
+      0,
+      18
+     ]
+    },
+    {
+     "name": "hyper_live_production_apply_plan",
+     "cohort": "cohort.source.hyperaistudioliveproductiontoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "ExternalEffect"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:23be49949668d0990632165823b655dc334a223b0bccc87f8bd498b8d3d05cfb",
+     "ledgerFingerprint": "sha256:0692bfe21a7ebe8b75b78389a882a07b2870a8955a55074c5def186e371257c4",
+     "evidence": [
+      0,
+      1,
+      0
+     ]
+    },
+    {
+     "name": "hyper_live_production_validate",
+     "cohort": "cohort.source.hyperaistudioliveproductiontoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:23be49949668d0990632165823b655dc334a223b0bccc87f8bd498b8d3d05cfb",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "gameplay_systems",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "gameplay_systems_plugin",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.MassAI",
+      "plugin.MassGameplay",
+      "plugin.GameFeatures",
+      "plugin.WorldConditions"
+     ]
+    },
+    {
+     "id": "gameplay_systems_backend",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.gameplay_systems"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_gameplay_systems_inspect",
+     "cohort": "cohort.source.hyperaistudiogameplaysystemstoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:048a9b836e576e7fb0afe24b879cf835d5a8cbbc17f9d67e7fcf3f026665c7b0",
+     "ledgerFingerprint": "sha256:295bc576d6310bc16780b255f479836fe3dad582a3f4ca5a228fd8e4ff5c2404",
+     "evidence": [
+      0,
+      3,
+      1
+     ]
+    },
+    {
+     "name": "hyper_gameplay_systems_apply_plan",
+     "cohort": "cohort.source.hyperaistudiogameplaysystemstoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:048a9b836e576e7fb0afe24b879cf835d5a8cbbc17f9d67e7fcf3f026665c7b0",
+     "ledgerFingerprint": "sha256:a5a1a26cd87d505262286eab89b0e239dd7f31d2e7e0a1687155f36100b874a2",
+     "evidence": [
+      0,
+      3,
+      0
+     ]
+    },
+    {
+     "name": "hyper_gameplay_systems_validate",
+     "cohort": "cohort.source.hyperaistudiogameplaysystemstoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:048a9b836e576e7fb0afe24b879cf835d5a8cbbc17f9d67e7fcf3f026665c7b0",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "character",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "character",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.MetaHumanGenerator"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_character_inspect",
+     "cohort": "cohort.source.hyperaistudiocharactertoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:156785217a8caa3d57186ccdf2d163142bcff44667089e65dcbca3ed11971eec",
+     "ledgerFingerprint": "sha256:302f9b5ca06985f86578c04b40a2b3ce983e2ddade5f398c073b32f704ff392f",
+     "evidence": [
+      0,
+      0,
+      1
+     ]
+    },
+    {
+     "name": "hyper_character_apply_plan",
+     "cohort": "cohort.source.hyperaistudiocharactertoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:156785217a8caa3d57186ccdf2d163142bcff44667089e65dcbca3ed11971eec",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_character_validate",
+     "cohort": "cohort.source.hyperaistudiocharactertoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:156785217a8caa3d57186ccdf2d163142bcff44667089e65dcbca3ed11971eec",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "paper2d",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "paper2d",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.Paper2D",
+      "probe.paper2d"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_paper2d_inspect",
+     "cohort": "cohort.source.hyperaistudiopaper2dtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:715e3690bbc540be2dd709b3833311d0faf183e990c52494b08d96b18c307c80",
+     "ledgerFingerprint": "sha256:439dd48ed9ee0d61c70728db9c10f146473ded9f0fa0e6c3cba373813fb66780",
+     "evidence": [
+      0,
+      0,
+      1
+     ]
+    },
+    {
+     "name": "hyper_paper2d_apply_plan",
+     "cohort": "cohort.source.hyperaistudiopaper2dtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:715e3690bbc540be2dd709b3833311d0faf183e990c52494b08d96b18c307c80",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_paper2d_validate",
+     "cohort": "cohort.source.hyperaistudiopaper2dtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:715e3690bbc540be2dd709b3833311d0faf183e990c52494b08d96b18c307c80",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "actor_modifier_property_animation",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "modifier_plugin",
+     "mode": "AnyOf",
+     "blocking": true,
+     "prerequisites": [
+      "plugin.ActorModifier",
+      "plugin.PropertyAnimator"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_actor_modifier_inspect",
+     "cohort": "cohort.source.hyperaistudioactormodifiertoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:0b4e9c662a6f86c029c9d51f0fdc8535496ee0065981f8565de7bcaf3fdf46ed",
+     "ledgerFingerprint": "sha256:53899ea9c2d3b205ccb911db0de933a1eb1c443cf6b3ac6824f7a2346804f0f6",
+     "evidence": [
+      0,
+      0,
+      2
+     ]
+    },
+    {
+     "name": "hyper_actor_modifier_apply_plan",
+     "cohort": "cohort.source.hyperaistudioactormodifiertoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:0b4e9c662a6f86c029c9d51f0fdc8535496ee0065981f8565de7bcaf3fdf46ed",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_actor_modifier_validate",
+     "cohort": "cohort.source.hyperaistudioactormodifiertoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:0b4e9c662a6f86c029c9d51f0fdc8535496ee0065981f8565de7bcaf3fdf46ed",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_property_animation_inspect",
+     "cohort": "cohort.source.hyperaistudiopropertyanimationtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:e0165fe8eb45b5d5d724699ef614d8bb6552e29e9a7b59e6da5f1ac35c2d9d01",
+     "ledgerFingerprint": "sha256:a0b8c33c0cd2d2a9ab25718bb61573bb63da1d10a0276f93fe9018a13f564614",
+     "evidence": [
+      0,
+      0,
+      1
+     ]
+    },
+    {
+     "name": "hyper_property_animation_apply_plan",
+     "cohort": "cohort.source.hyperaistudiopropertyanimationtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Edit"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:e0165fe8eb45b5d5d724699ef614d8bb6552e29e9a7b59e6da5f1ac35c2d9d01",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_property_animation_validate",
+     "cohort": "cohort.source.hyperaistudiopropertyanimationtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:e0165fe8eb45b5d5d724699ef614d8bb6552e29e9a7b59e6da5f1ac35c2d9d01",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "id": "automation_profiling_build",
+   "tier": "Core",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "automation",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.automation_controller"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_test_inspect",
+     "cohort": "cohort.source.hyperaistudioautomationtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:112b2ce9aef99d5778d3f38843062df17b4678eeb283c1c5a0e5aadb20f5ad4d",
+     "ledgerFingerprint": "sha256:2faaf2e8d284603e866be014d828c9fd6db75a27056ac1ce2d886ed61c2a21e5",
+     "evidence": [
+      0,
+      9,
+      0
+     ]
+    },
+    {
+     "name": "hyper_test_run",
+     "cohort": "cohort.source.hyperaistudioautomationtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "ExternalEffect"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:112b2ce9aef99d5778d3f38843062df17b4678eeb283c1c5a0e5aadb20f5ad4d",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_test_validate",
+     "cohort": "cohort.source.hyperaistudioautomationtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "Read"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:112b2ce9aef99d5778d3f38843062df17b4678eeb283c1c5a0e5aadb20f5ad4d",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "hyper_profile_capture",
+     "cohort": "cohort.source.hyperaistudioautomationtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "ExternalEffect"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:112b2ce9aef99d5778d3f38843062df17b4678eeb283c1c5a0e5aadb20f5ad4d",
+     "ledgerFingerprint": "sha256:db4c0058881d1373fd0a0a82787e251899d1ca9a1736130021a9cb5a4775d03c",
+     "evidence": [
+      0,
+      1,
+      0
+     ]
+    },
+    {
+     "name": "hyper_build_diagnose",
+     "cohort": "cohort.source.hyperaistudioautomationtoolset.v1",
+     "admission": "SourceCandidate",
+     "safety": [
+      "ExternalEffect"
+     ],
+     "sourceArtifactCount": 1,
+     "sourceArtifactFingerprint": "sha256:112b2ce9aef99d5778d3f38843062df17b4678eeb283c1c5a0e5aadb20f5ad4d",
+     "ledgerFingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "evidence": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  }
+ ]
+}

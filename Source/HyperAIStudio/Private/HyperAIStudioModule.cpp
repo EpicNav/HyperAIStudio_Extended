@@ -33,6 +33,7 @@
 #include "HyperAIStudioDiagnosticsRegistration.h"
 #include "HyperAIStudioExtensionRuntime.h"
 #include "HyperAIStudioAgentActivity.h"
+#include "HyperAIStudioCapabilityCatalogCounts.h"
 #include "HyperAIStudioApprovalGate.h"
 #include "HyperAIStudioAsyncJobHost.h"
 #include "HyperAIStudioFoundationProbe.h"
@@ -2808,7 +2809,7 @@ private:
 			TEXT("Extended Hyper Tools"),
 			TEXT("Primary"),
 			TEXT("Tools"),
-			TEXT("Epic + 109 Hyper"),
+			FString::Printf(TEXT("Epic + %d Hyper"), HyperAIStudio::CapabilityCatalog::GeneratedToolCount),
 			TEXT("3 discovery dispatchers"),
 			TEXT("Optional UE 5.8 source catalog"),
 			TEXT("Search tool name, description, or toolset"),
