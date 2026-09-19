@@ -1,6 +1,7 @@
 // Games by Hyper 2026.
 
 #include "HyperAIStudioNiagaraToolset.h"
+#include "HyperAIStudioAgentActivity.h"
 
 #include "AssetRegistry/IAssetRegistry.h"
 #include "EdGraph/EdGraph.h"
@@ -1592,7 +1593,7 @@ FHyperAINiagaraValidateReport FHyperAIStudioNiagaraContracts::Validate(
 	if (!Request.ExpectedRevision.IsEmpty() && Request.ExpectedRevision != Report.Revision)
 	{
 		return Reject(TEXT("stale_revision"),
-			TEXT("The loaded Niagara System no longer matches expected_revision; inspect it again."));
+			TEXT("The loaded Niagara System no longer matches expected_revision; inspect it again.") + FHyperAIStudioAgentActivityLog::DescribeLastChange(Request.TargetPath));
 	}
 
 	UNiagaraSystem* System = Cast<UNiagaraSystem>(FSoftObjectPath(Request.TargetPath).ResolveObject());
@@ -1793,7 +1794,7 @@ FHyperAINiagaraApplyPlanReport FHyperAIStudioNiagaraContracts::BuildPlan(
 	if (Snapshot.Health.Revision != Request.ExpectedRevision)
 	{
 		return Reject(TEXT("stale_revision"),
-			TEXT("The loaded Niagara System changed after inspection; inspect it again."));
+			TEXT("The loaded Niagara System changed after inspection; inspect it again.") + FHyperAIStudioAgentActivityLog::DescribeLastChange(Request.TargetPath));
 	}
 	if (Snapshot.Health.bPackageDirty || !Snapshot.Health.bExistsOnDisk
 		|| Snapshot.Health.DiskExistence != TEXT("exists"))

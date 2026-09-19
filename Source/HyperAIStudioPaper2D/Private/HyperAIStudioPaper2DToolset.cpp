@@ -1,6 +1,7 @@
 // Games by Hyper 2026.
 
 #include "HyperAIStudioPaper2DToolset.h"
+#include "HyperAIStudioAgentActivity.h"
 
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -1501,7 +1502,7 @@ FHyperAIPaper2DApplyPlanReport FHyperAIStudioPaper2DContracts::BuildPlan(
 	if (Snapshot.Asset.PersistedRevision != Request.ExpectedPersistedRevision)
 	{
 		return Reject(TEXT("stale_revision"),
-			TEXT("The exact loaded Paper2D asset changed after inspection."));
+			*(TEXT("The exact loaded Paper2D asset changed after inspection.") + FHyperAIStudioAgentActivityLog::DescribeLastChange(Request.TargetPath)));
 	}
 	if (Snapshot.Asset.AssetKind != Patch.ExpectedKind)
 	{

@@ -4,6 +4,7 @@
 
 #include "Containers/Ticker.h"
 #include "HAL/PlatformTime.h"
+#include "HyperAIStudioAgentActivity.h"
 #include "HyperAIStudioOperationJournal.h"
 #include "HyperAIStudioTypedArtifactExecutionInternal.h"
 #include "Misc/DateTime.h"
@@ -432,6 +433,7 @@ namespace HyperAIStudio::TypedArtifactHost::Private
 		}
 
 		TSharedPtr<IHyperAIStudioTypedArtifactAsyncSession, ESPMode::ThreadSafe> Released;
+		bool bFirstTerminal = false;
 		{
 			FScopeLock Lock(&State->Mutex);
 			if (State->Active.Get() != Session.Get()
@@ -439,27 +441,42 @@ namespace HyperAIStudio::TypedArtifactHost::Private
 			{
 				return false;
 			}
+			bFirstTerminal = !State->Archived.Contains(Receipt.OperationId);
 			ArchiveLocked(
 				*State,
 				Receipt,
 				ToStatus(Receipt, Snapshot),
 				Snapshot.ReplayCredentialFingerprint,
 				Snapshot.Safety);
-			if (Snapshot.bOutstandingDispatch)
+			if (!Snapshot.bOutstandingDispatch)
 			{
-				return false;
+				Released = MoveTemp(State->Active);
+				State->ActiveReceipt = FHyperAIStudioTypedArtifactStageReceipt{};
+				State->bPumpAdmissionBarrier = false;
+				if (State->ActiveTickerCallbackCount == 0)
+				{
+					OutTickerHandle = State->TickerHandle;
+				}
+				State->TickerHandle.Reset();
 			}
-
-			Released = MoveTemp(State->Active);
-			State->ActiveReceipt = FHyperAIStudioTypedArtifactStageReceipt{};
-			State->bPumpAdmissionBarrier = false;
-			if (State->ActiveTickerCallbackCount == 0)
-			{
-				OutTickerHandle = State->TickerHandle;
-			}
-			State->TickerHandle.Reset();
 		}
-		return true;
+		// Every trusted operation ends here exactly once; the outcome feeds the Activity panel and the agent
+		// scoreboard. Recorded outside the lock because the log broadcasts to the UI.
+		if (bFirstTerminal && Snapshot.Safety != EHyperAIStudioDomainSafety::Read)
+		{
+			const EHyperAIStudioTypedArtifactExecutionState Outcome = Snapshot.Result.State;
+			FHyperAIStudioActivityEntry Entry;
+			Entry.Kind = Outcome == EHyperAIStudioTypedArtifactExecutionState::Completed
+				|| Outcome == EHyperAIStudioTypedArtifactExecutionState::ReplayCompleted
+				? EHyperAIStudioActivityKind::Completed : EHyperAIStudioActivityKind::Failed;
+			Entry.PackId = Receipt.PackId;
+			Entry.ToolName = Receipt.ToolName;
+			Entry.OperationId = Receipt.OperationId;
+			Entry.StatusCode = Snapshot.Result.Status;
+			Entry.Detail = Snapshot.Result.Diagnostic.Left(512);
+			FHyperAIStudioAgentActivityLog::Record(MoveTemp(Entry));
+		}
+		return Released.IsValid();
 	}
 
 	void ArchiveRejectedAttemptLocked(

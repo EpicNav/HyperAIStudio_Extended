@@ -4,6 +4,8 @@
 
 #include "CoreMinimal.h"
 #include "Animation/CurveSequence.h"
+#include "Containers/Ticker.h"
+#include "HyperAIStudioAgentActivity.h"
 #include "HyperAIStudioAgentState.h"
 #include "HyperAIStudioService.h"
 #include "Widgets/Input/SButton.h"
@@ -22,9 +24,14 @@ public:
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
+	virtual ~SHyperAIStudioQuickActionWindow() override;
 	/** The dock tab hosting this panel, so its label can carry the agent's state. */
 	void SetOwnerTab(const TSharedRef<class SDockTab>& InTab);
 	EHyperAIStudioAgentState GetAgentState() const { return AgentState.State; }
+	/** The agent and model this tab's terminal launched, while that session runs. */
+	bool GetRunningAgent(FString& OutAgent, FString& OutModel) const;
+	/** "HyperAI Chat 2: VFX (Codex)": which tab and agent, for handoff menus and messages. */
+	FString GetTabDescription() const;
 	bool IsActiveOrSelectedAgent(const FString& AgentName) const;
 	void SelectAgentByName(const FString& AgentName);
 	/** Restart the terminal on that chat's agent, resuming the conversation. */
@@ -54,7 +61,22 @@ private:
 	TSharedRef<SWidget> BuildMcpStatusSelector();
 	TSharedRef<SWidget> BuildMcpStatusMenu();
 	/** Paste text into the running agent's prompt without sending it. */
-	bool InsertIntoAgentPrompt(const FString& Text, const FString& Label);
+	bool InsertIntoAgentPrompt(const FString& Text, const FString& Label, bool bFocusTerminal = true);
+	/** Handoff prompts: sent when the agent is idle and auto-send is on, otherwise typed in for the user to send. */
+	bool DeliverHandoffPrompt(const FString& Text, const FString& Label);
+	TSharedRef<SWidget> BuildNewTabMenu();
+	TSharedRef<SWidget> BuildHandoffMenu();
+	void OpenRoutedTab(const FString& Category, const FHyperAIStudioRouteChoice& Choice);
+	void StartHandoff(TWeakPtr<SHyperAIStudioQuickActionWindow> Builder);
+	/**
+	 * Moves a running handoff along: plan file written, then result file written, then review asked for. Runs on
+	 * the core ticker and watches files, because Slate paints a hidden tab's terminal, and its timers, not at all.
+	 */
+	bool TickHandoff(float DeltaTime);
+	TArray<FString> GetUsableAgentNames() const;
+	/** The model this tab launches AgentName with: the tab's own choice, else the agent's saved one. */
+	FString GetModelForAgent(const FString& AgentName) const;
+	FText GetTabTitle() const;
 	FText GetMcpStatusText() const;
 	FSlateColor GetMcpStatusColor() const;
 	void SelectModel(FString ModelId);
@@ -142,4 +164,26 @@ private:
 	bool bPlanAutoAcceptSent = false;
 	bool bPlanAutoAcceptConfirmed = false;
 	double PlanAutoAcceptSentTime = 0.0;
+	/** Kind of task this tab was opened for from the new-tab menu; shown on the tab. */
+	FString RouteCategory;
+	/** Model chosen in this tab (or by its route) for TabModelAgent; other tabs keep their own. */
+	FString TabModel;
+	FString TabModelAgent;
+	FString ActiveTerminalModel;
+
+	/** Plan here, build in another tab, then review here. */
+	struct FHandoff
+	{
+		FString PlanPath;
+		/** The builder writes what it changed here when it is done. */
+		FString ResultPath;
+		TWeakPtr<SHyperAIStudioQuickActionWindow> Builder;
+		FString BuilderDescription;
+		bool bBuilding = false;
+		/** Size of the awaited file at the last tick; a file counts as written once its size holds for a tick. */
+		int64 LastSize = -1;
+		double StartedTime = 0.0;
+	};
+	TOptional<FHandoff> Handoff;
+	FTSTicker::FDelegateHandle HandoffTicker;
 };

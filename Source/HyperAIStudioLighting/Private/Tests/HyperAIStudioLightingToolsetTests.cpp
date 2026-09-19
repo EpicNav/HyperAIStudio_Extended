@@ -273,6 +273,9 @@ bool FHyperAIStudioLightingOpsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("bias set"), ValueOf(Unlocked, TEXT("post_process"), TEXT("exposure_bias")), FString(TEXT("1.5")));
 	TestEqual(TEXT("the existing volume was reused"), Unlocked.Num(), After.Num());
 
+	// Every editor undo checks that no graph pin is left unresolved, and a package still loading in the background
+	// holds pins that are; finish loading first so another asset's load cannot fail this test.
+	FlushAsyncLoading();
 	if (GEditor && GEditor->UndoTransaction())
 	{
 		TestEqual(TEXT("one undo restores the lock"), ValueOf(Gate::ReadActors(*World), TEXT("post_process"), TEXT("exposure_method")), FString(TEXT("manual")));
@@ -380,6 +383,7 @@ bool FHyperAIStudioLightingEndToEndTest::RunTest(const FString& Parameters)
 	TestNotEqual(TEXT("the lighting changed"), After.Revision, Before.Revision);
 	TestTrue(TEXT("exposure is locked"), After.bExposureLocked);
 	TestEqual(TEXT("contrast applied"), ValueOf(After.Actors, TEXT("post_process"), TEXT("contrast")), FString(TEXT("1.05")));
+	FlushAsyncLoading();
 	TestTrue(TEXT("undo is available"), GEditor && GEditor->UndoTransaction());
 	TestEqual(TEXT("one undo restores the level's lighting"), FHyperAIStudioLightingContracts::Inspect({}).Revision, Before.Revision);
 	return true;

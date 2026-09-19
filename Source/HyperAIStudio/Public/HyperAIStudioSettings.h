@@ -129,6 +129,29 @@ struct FHyperAIStudioAgentModelRoute
 	FString SelectedModel;
 };
 
+/** Which agent a new chat tab for one kind of task starts with. */
+USTRUCT()
+struct FHyperAIStudioAgentTaskRoute
+{
+	GENERATED_BODY()
+
+	/** Shown in the new-tab menu and on the tab, e.g. VFX. */
+	UPROPERTY(Config, EditAnywhere, Category = "Routing")
+	FString Category;
+
+	/** Empty picks the agent with the best record on Packs, or the preferred agent until one has a record. */
+	UPROPERTY(Config, EditAnywhere, Category = "Routing")
+	FString AgentName;
+
+	/** Empty uses the agent's selected model. Must be in that agent's model list, or smart for Claude Code. */
+	UPROPERTY(Config, EditAnywhere, Category = "Routing")
+	FString ModelId;
+
+	/** Capability packs this kind of task uses; their operation outcomes decide the automatic pick. */
+	UPROPERTY(Config, EditAnywhere, Category = "Routing")
+	TArray<FString> Packs;
+};
+
 UCLASS(Config = EditorPerProjectUserSettings, DefaultConfig, meta = (DisplayName = "HyperAIStudio"))
 class HYPERAISTUDIO_API UHyperAIStudioSettings : public UDeveloperSettings
 {
@@ -274,6 +297,17 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Models")
 	bool bAutoAcceptPlansInSmartMode = true;
 
+	/** The chat panel's new-tab menu: one entry per kind of task. Empty restores the built-in list. */
+	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Routing")
+	TArray<FHyperAIStudioAgentTaskRoute> AgentTaskRoutes;
+
+	/**
+	 * During a handoff between tabs, send each prompt (plan, implement, review) as soon as the receiving agent is
+	 * idle. Off, or while that agent is busy, the prompt is only typed in for you to send.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Routing")
+	bool bAutoSendHandoffPrompts = true;
+
 	/**
 	 * How agents build materials. Hybrid: graph nodes, which artists can read and the compiler optimises, plus a
 	 * Custom HLSL node only for math nodes cannot express, each with a stated reason. Nodes forbids Custom HLSL;
@@ -353,6 +387,31 @@ public:
 			}
 		}
 		return bAdded;
+	}
+
+	/** Seeds the task routes when the list is empty. Returns true if it did. */
+	bool EnsureDefaultTaskRoutes()
+	{
+		if (!AgentTaskRoutes.IsEmpty())
+		{
+			return false;
+		}
+		auto Add = [this](const TCHAR* Category, TArray<FString> Packs, const TCHAR* Agent = TEXT(""), const TCHAR* Model = TEXT(""))
+		{
+			FHyperAIStudioAgentTaskRoute& Route = AgentTaskRoutes.AddDefaulted_GetRef();
+			Route.Category = Category;
+			Route.AgentName = Agent;
+			Route.ModelId = Model;
+			Route.Packs = MoveTemp(Packs);
+		};
+		Add(TEXT("Plan a feature"), {}, TEXT("Claude Code"), SmartModelId);
+		Add(TEXT("Materials"), {TEXT("materials_dynamic_material"), TEXT("texture_graph")});
+		Add(TEXT("VFX"), {TEXT("niagara_vfx")});
+		Add(TEXT("Lighting"), {TEXT("lighting_lookdev")});
+		Add(TEXT("Level Design"), {TEXT("worldbuilding_navigation"), TEXT("pcg"), TEXT("geometry_interchange")});
+		Add(TEXT("Animation"), {TEXT("animation_rigging"), TEXT("character")});
+		Add(TEXT("Gameplay"), {TEXT("blueprint"), TEXT("gameplay_systems"), TEXT("gas"), TEXT("gameplay_ai"), TEXT("enhanced_input")});
+		return true;
 	}
 
 	/**

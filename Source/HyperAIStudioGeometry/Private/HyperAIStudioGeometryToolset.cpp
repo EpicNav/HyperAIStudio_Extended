@@ -1,6 +1,7 @@
 // Games by Hyper 2026.
 
 #include "HyperAIStudioGeometryToolset.h"
+#include "HyperAIStudioAgentActivity.h"
 
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -1500,7 +1501,7 @@ FHyperAIGeometryApplyPlanReport FHyperAIStudioGeometryContracts::BuildPlan(
 	if (Snapshot.Asset.PersistedRevision != Request.ExpectedPersistedRevision)
 	{
 		return Reject(TEXT("stale_revision"),
-			TEXT("The fresh loaded-only persisted mesh revision does not match the assertion."));
+			*(TEXT("The fresh loaded-only persisted mesh revision does not match the assertion.") + FHyperAIStudioAgentActivityLog::DescribeLastChange(Request.TargetPath)));
 	}
 	if (Snapshot.Asset.AssetKind != TEXT("static_mesh"))
 	{

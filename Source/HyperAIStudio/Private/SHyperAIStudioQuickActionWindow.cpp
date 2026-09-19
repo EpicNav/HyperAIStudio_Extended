@@ -219,6 +219,53 @@ namespace HyperAIStudio::QuickAction
 			return Route.Name.Equals(AgentName, ESearchCase::IgnoreCase);
 		});
 	}
+
+	TArray<TWeakPtr<SHyperAIStudioQuickActionWindow>>& LiveWindows()
+	{
+		static TArray<TWeakPtr<SHyperAIStudioQuickActionWindow>> Windows;
+		Windows.RemoveAll([](const TWeakPtr<SHyperAIStudioQuickActionWindow>& Window) { return !Window.IsValid(); });
+		return Windows;
+	}
+
+	struct FPendingRoute
+	{
+		FString Category;
+		FHyperAIStudioRouteChoice Choice;
+	};
+
+	/** Set just before a routed tab opens, and taken by the tab it opens. */
+	TOptional<FPendingRoute>& PendingRoute()
+	{
+		static TOptional<FPendingRoute> Route;
+		return Route;
+	}
+
+	/**
+	 * MCP tool calls carry no caller identity, so credit goes to the only tab running an agent, or to the only one
+	 * working when several run. ponytail: a guess from screen state; per-tab MCP endpoints would make it exact.
+	 */
+	bool ResolveWorkingAgent(FString& OutAgent, FString& OutModel)
+	{
+		TArray<TSharedPtr<SHyperAIStudioQuickActionWindow>> Running;
+		for (const TWeakPtr<SHyperAIStudioQuickActionWindow>& Weak : LiveWindows())
+		{
+			FString Agent;
+			FString Model;
+			const TSharedPtr<SHyperAIStudioQuickActionWindow> Window = Weak.Pin();
+			if (Window.IsValid() && Window->GetRunningAgent(Agent, Model))
+			{
+				Running.Add(Window);
+			}
+		}
+		if (Running.Num() > 1)
+		{
+			Running.RemoveAll([](const TSharedPtr<SHyperAIStudioQuickActionWindow>& Window)
+			{
+				return Window->GetAgentState() != EHyperAIStudioAgentState::Working;
+			});
+		}
+		return Running.Num() == 1 && Running[0]->GetRunningAgent(OutAgent, OutModel);
+	}
 }
 
 void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
@@ -230,6 +277,27 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 	Status = Service->GetStatusSync();
 	LastMessage = HyperAIStudio::QuickAction::MessageForStatus(Status);
 	RefreshAgentOptions();
+	if (TOptional<HyperAIStudio::QuickAction::FPendingRoute>& Pending = HyperAIStudio::QuickAction::PendingRoute(); Pending.IsSet())
+	{
+		const HyperAIStudio::QuickAction::FPendingRoute Route = Pending.GetValue();
+		Pending.Reset();
+		RouteCategory = Route.Category;
+		for (const TSharedPtr<FString>& Agent : AgentOptions)
+		{
+			if (Agent.IsValid() && Agent->Equals(Route.Choice.Agent, ESearchCase::IgnoreCase))
+			{
+				SelectedAgent = Agent;
+			}
+		}
+		if (!Route.Choice.Model.IsEmpty())
+		{
+			TabModel = Route.Choice.Model;
+			TabModelAgent = Route.Choice.Agent;
+		}
+		LastMessage = FText::Format(LOCTEXT("RoutedTabOpened", "Opened for {0} with {1}. {2}"), FText::FromString(Route.Category),
+			FText::FromString(Route.Choice.Model.IsEmpty() ? Route.Choice.Agent : FString::Printf(TEXT("%s (%s)"), *Route.Choice.Agent, *Route.Choice.Model)),
+			FText::FromString(Route.Choice.Reason));
+	}
 	ResetTranscript();
 	SAssignNew(TerminalScrollBar, SScrollBar)
 		.Orientation(Orient_Vertical)
@@ -368,6 +436,8 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 	];
 
 	HyperAIStudio::QuickAction::ActiveQuickActionWindow() = StaticCastSharedRef<SHyperAIStudioQuickActionWindow>(AsShared());
+	HyperAIStudio::QuickAction::LiveWindows().Add(StaticCastSharedRef<SHyperAIStudioQuickActionWindow>(AsShared()));
+	FHyperAIStudioAgentActivityLog::SetAgentResolver(&HyperAIStudio::QuickAction::ResolveWorkingAgent);
 	if (HyperAIStudio::QuickAction::QueuedVisibleTerminalCommands().Num() > 0)
 	{
 		bTerminalStartupPaused = true;
@@ -381,6 +451,14 @@ void SHyperAIStudioQuickActionWindow::Construct(const FArguments& InArgs)
 	RegisterActiveTimer(0.5f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunAgentStateHeartbeat));
 	RegisterActiveTimer(0.35f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunDeferredTerminalStartup));
 	RegisterActiveTimer(0.25f, FWidgetActiveTimerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::RunQueuedVisibleTerminalCommandPoll));
+}
+
+SHyperAIStudioQuickActionWindow::~SHyperAIStudioQuickActionWindow()
+{
+	if (HandoffTicker.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(HandoffTicker);
+	}
 }
 
 bool SHyperAIStudioQuickActionWindow::IsActiveOrSelectedAgent(const FString& AgentName) const
@@ -715,15 +793,13 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildHeader()
 		.VAlign(VAlign_Center)
 		.Padding(0.0f, 0.0f, 2.0f, 0.0f)
 		[
-			SNew(SButton)
-			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
-			.ToolTipText(LOCTEXT("NewAgentTabTooltip", "Open another chat tab. Each tab runs its own agent; dock them side by side to watch both."))
+			SNew(SComboButton)
+			.ComboButtonStyle(FAppStyle::Get(), "SimpleComboButton")
+			.HasDownArrow(false)
+			.ToolTipText(LOCTEXT("NewAgentTabTooltip", "Open another chat tab, plain or for a kind of task. Each tab runs its own agent; dock them side by side to watch both."))
 			.IsEnabled_Lambda([this]() { return OnNewAgentTab.IsBound(); })
-			.OnClicked_Lambda([this]()
-			{
-				OnNewAgentTab.ExecuteIfBound();
-				return FReply::Handled();
-			})
+			.OnGetMenuContent(this, &SHyperAIStudioQuickActionWindow::BuildNewTabMenu)
+			.ButtonContent()
 			[
 				SNew(SImage)
 				.Image(FAppStyle::GetBrush(TEXT("Icons.Plus")))
@@ -825,6 +901,26 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildAgentActions()
 		.FillWidth(1.0f)
 		[
 			SNew(SBox)
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(0.0f, 0.0f, 6.0f, 0.0f)
+		[
+			SNew(SComboButton)
+			.ToolTipText(LOCTEXT("HandoffTooltip", "Plan here, build in another tab: this agent writes a plan file, the other tab's agent implements it and reports, then this one reviews the work."))
+			.IsEnabled_Lambda([this]()
+			{
+				FString Agent;
+				FString Model;
+				return Handoff.IsSet() || GetRunningAgent(Agent, Model);
+			})
+			.OnGetMenuContent(this, &SHyperAIStudioQuickActionWindow::BuildHandoffMenu)
+			.ButtonContent()
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]() { return Handoff.IsSet() ? LOCTEXT("HandoffRunning", "Handoff Running") : LOCTEXT("HandoffButton", "Hand Off"); })
+			]
 		]
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
@@ -943,7 +1039,7 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildContextMenu()
 	return Menu.MakeWidget();
 }
 
-bool SHyperAIStudioQuickActionWindow::InsertIntoAgentPrompt(const FString& Text, const FString& Label)
+bool SHyperAIStudioQuickActionWindow::InsertIntoAgentPrompt(const FString& Text, const FString& Label, const bool bFocusTerminal)
 {
 	const FString Trimmed = Text.TrimStartAndEnd();
 	if (Trimmed.IsEmpty() || !TerminalWidget.IsValid() || !TerminalWidget->IsSessionRunning())
@@ -967,7 +1063,299 @@ bool SHyperAIStudioQuickActionWindow::InsertIntoAgentPrompt(const FString& Text,
 	}
 	LastMessage = FText::Format(LOCTEXT("ContextInserted", "Inserted {0} into the prompt."), FText::FromString(Label));
 	AddTranscriptLine(LastMessage.ToString());
-	FSlateApplication::Get().SetKeyboardFocus(TerminalWidget, EFocusCause::SetDirectly);
+	if (bFocusTerminal)
+	{
+		FSlateApplication::Get().SetKeyboardFocus(TerminalWidget, EFocusCause::SetDirectly);
+	}
+	return true;
+}
+
+bool SHyperAIStudioQuickActionWindow::GetRunningAgent(FString& OutAgent, FString& OutModel) const
+{
+	if (ActiveTerminalAgentName.IsEmpty() || !TerminalWidget.IsValid() || !TerminalWidget->IsSessionRunning())
+	{
+		return false;
+	}
+	OutAgent = ActiveTerminalAgentName;
+	OutModel = ActiveTerminalModel;
+	return true;
+}
+
+FString SHyperAIStudioQuickActionWindow::GetTabDescription() const
+{
+	FString Agent;
+	FString Model;
+	if (!GetRunningAgent(Agent, Model))
+	{
+		Agent = GetSelectedAgentName();
+		Model = GetModelForAgent(Agent);
+	}
+	return FString::Printf(TEXT("%s (%s%s)"), *GetTabTitle().ToString(), *Agent,
+		Model.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(", %s"), *Model));
+}
+
+TArray<FString> SHyperAIStudioQuickActionWindow::GetUsableAgentNames() const
+{
+	TArray<FString> Names;
+	for (const TSharedPtr<FString>& Agent : AgentOptions)
+	{
+		if (Agent.IsValid() && *Agent != HyperAIStudio::QuickAction::NoUsableAgentsLabel())
+		{
+			Names.Add(*Agent);
+		}
+	}
+	return Names;
+}
+
+FString SHyperAIStudioQuickActionWindow::GetModelForAgent(const FString& AgentName) const
+{
+	if (!TabModelAgent.IsEmpty() && TabModelAgent.Equals(AgentName, ESearchCase::IgnoreCase))
+	{
+		return TabModel;
+	}
+	const FHyperAIStudioAgentModelRoute* Route = GetDefault<UHyperAIStudioSettings>()->FindAgentModelRoute(AgentName);
+	return Route ? Route->SelectedModel : FString();
+}
+
+TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildNewTabMenu()
+{
+	if (UHyperAIStudioSettings* MutableSettings = GetMutableDefault<UHyperAIStudioSettings>(); MutableSettings->EnsureDefaultTaskRoutes())
+	{
+		MutableSettings->SaveConfig();
+	}
+	const UHyperAIStudioSettings* Settings = GetDefault<UHyperAIStudioSettings>();
+	const TArray<FString> Usable = GetUsableAgentNames();
+
+	FMenuBuilder Menu(true, nullptr);
+	Menu.AddMenuEntry(
+		LOCTEXT("NewPlainTab", "New Chat Tab"),
+		LOCTEXT("NewPlainTabTooltip", "Another tab, starting with the preferred agent."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Plus"),
+		FUIAction(FExecuteAction::CreateSPLambda(this, [this]() { OnNewAgentTab.ExecuteIfBound(); })));
+	Menu.BeginSection(NAME_None, LOCTEXT("NewTabForHeading", "New tab for"));
+	for (const FHyperAIStudioAgentTaskRoute& Route : Settings->AgentTaskRoutes)
+	{
+		if (Route.Category.IsEmpty())
+		{
+			continue;
+		}
+		const FHyperAIStudioRouteChoice Choice = FHyperAIStudioAgentScoreboard::ChooseAgent(
+			Route.AgentName, Route.ModelId, Route.Packs, Usable, Settings->PreferredAgent);
+		const FHyperAIStudioAgentScore Record = FHyperAIStudioAgentScoreboard::Summarize(Choice.Agent, Choice.Model, Route.Packs);
+		FString ToolTip = Choice.Reason;
+		if (Record.Total() > 0)
+		{
+			ToolTip += FString::Printf(TEXT("\nIts record on these tasks: %d completed, %d failed, %d rejected by you."),
+				Record.Completed, Record.Failed, Record.Rejected);
+		}
+		const FString AgentText = Choice.Model.IsEmpty() ? Choice.Agent : FString::Printf(TEXT("%s (%s)"), *Choice.Agent, *Choice.Model);
+		Menu.AddMenuEntry(
+			FText::Format(LOCTEXT("RoutedTabEntry", "{0}: {1}"), FText::FromString(Route.Category),
+				Choice.Agent.IsEmpty() ? LOCTEXT("RoutedNoAgent", "no agent set up") : FText::FromString(AgentText)),
+			FText::FromString(ToolTip),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateSPLambda(this, [this, Category = Route.Category, Choice]() { OpenRoutedTab(Category, Choice); }),
+				FCanExecuteAction::CreateLambda([bHasAgent = !Choice.Agent.IsEmpty()]() { return bHasAgent; })));
+	}
+	Menu.EndSection();
+	Menu.AddMenuSeparator();
+	Menu.AddMenuEntry(
+		LOCTEXT("EditRouting", "Edit Task Routing..."),
+		LOCTEXT("EditRoutingTooltip", "Pick an agent and model per kind of task, or leave the agent empty to choose by track record."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Edit"),
+		FUIAction(FExecuteAction::CreateLambda([]() { HyperAIStudio::QuickAction::OpenSettingsPage(GetDefault<UHyperAIStudioSettings>()); })));
+	return Menu.MakeWidget();
+}
+
+void SHyperAIStudioQuickActionWindow::OpenRoutedTab(const FString& Category, const FHyperAIStudioRouteChoice& Choice)
+{
+	TOptional<HyperAIStudio::QuickAction::FPendingRoute>& Pending = HyperAIStudio::QuickAction::PendingRoute();
+	Pending = HyperAIStudio::QuickAction::FPendingRoute{Category, Choice};
+	OnNewAgentTab.ExecuteIfBound();
+	if (Pending.IsSet())
+	{
+		// No new tab took it: every chat tab is already open.
+		Pending.Reset();
+		LastMessage = LOCTEXT("RoutedTabNoRoom", "Every chat tab is already open; close one to start another agent.");
+		AddTranscriptLine(LastMessage.ToString());
+	}
+}
+
+TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildHandoffMenu()
+{
+	FMenuBuilder Menu(true, nullptr);
+	if (Handoff.IsSet())
+	{
+		Menu.AddMenuEntry(
+			FText::Format(LOCTEXT("StopHandoff", "Stop Handoff to {0}"), FText::FromString(Handoff->BuilderDescription)),
+			FText::Format(LOCTEXT("StopHandoffTooltip", "Stop watching {0}. Prompts already sent stay sent."), FText::FromString(Handoff->PlanPath)),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.X"),
+			FUIAction(FExecuteAction::CreateSPLambda(this, [this]()
+			{
+				Handoff.Reset();
+				AddTranscriptLine(TEXT("Handoff stopped."));
+			})));
+		return Menu.MakeWidget();
+	}
+	Menu.BeginSection(NAME_None, LOCTEXT("HandoffHeading", "Plan here, build in"));
+	int32 Targets = 0;
+	for (const TWeakPtr<SHyperAIStudioQuickActionWindow>& Weak : HyperAIStudio::QuickAction::LiveWindows())
+	{
+		const TSharedPtr<SHyperAIStudioQuickActionWindow> Window = Weak.Pin();
+		FString Agent;
+		FString Model;
+		if (!Window.IsValid() || Window.Get() == this || !Window->GetRunningAgent(Agent, Model))
+		{
+			continue;
+		}
+		++Targets;
+		Menu.AddMenuEntry(
+			FText::FromString(Window->GetTabDescription()),
+			LOCTEXT("HandoffTargetTooltip", "This agent writes a plan file, that tab's agent implements it and writes a report, then this agent reviews the work."),
+			FSlateIcon(),
+			FUIAction(FExecuteAction::CreateSPLambda(this, [this, Weak]() { StartHandoff(Weak); })));
+	}
+	if (Targets == 0)
+	{
+		Menu.AddWidget(
+			SNew(SBox)
+			.WidthOverride(240.0f)
+			.Padding(FMargin(12.0f, 4.0f))
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("HandoffNoTargets", "Open another chat tab with + and start its agent first."))
+				.AutoWrapText(true)
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			],
+			FText::GetEmpty());
+	}
+	Menu.EndSection();
+	return Menu.MakeWidget();
+}
+
+void SHyperAIStudioQuickActionWindow::StartHandoff(TWeakPtr<SHyperAIStudioQuickActionWindow> Builder)
+{
+	const TSharedPtr<SHyperAIStudioQuickActionWindow> Target = Builder.Pin();
+	if (!Target.IsValid())
+	{
+		return;
+	}
+	const FString Folder = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("HyperAIStudio/Handoffs"));
+	IFileManager::Get().MakeDirectory(*Folder, true);
+	const FString Stem = Folder / FString::Printf(TEXT("%s-chat%d-to-chat%d"), *FDateTime::Now().ToString(TEXT("%Y%m%d-%H%M%S")), TabIndex, Target->TabIndex);
+	FHandoff Next;
+	Next.PlanPath = Stem + TEXT("-plan.md");
+	Next.ResultPath = Stem + TEXT("-result.md");
+	Next.Builder = Builder;
+	Next.BuilderDescription = Target->GetTabDescription();
+	Next.StartedTime = FPlatformTime::Seconds();
+	const FString Prompt = FString::Printf(
+		TEXT("Plan the current task for another agent, %s, to implement. Write the complete plan as Markdown to %s: the goal, ")
+		TEXT("the assets and HyperAI tools involved, ordered steps, and how to check the result. Do not implement it yourself; stop once the file is written."),
+		*Next.BuilderDescription, *Next.PlanPath);
+	if (!DeliverHandoffPrompt(Prompt, TEXT("handoff plan request")))
+	{
+		return;
+	}
+	Handoff = MoveTemp(Next);
+	if (!HandoffTicker.IsValid())
+	{
+		HandoffTicker = FTSTicker::GetCoreTicker().AddTicker(
+			FTickerDelegate::CreateSP(this, &SHyperAIStudioQuickActionWindow::TickHandoff), 1.0f);
+	}
+	AddTranscriptLine(FString::Printf(TEXT("Handoff started: plan here, build in %s. Waiting for %s."), *Handoff->BuilderDescription, *Handoff->PlanPath));
+}
+
+bool SHyperAIStudioQuickActionWindow::TickHandoff(float DeltaTime)
+{
+	auto Stop = [this](const FString& Why)
+	{
+		if (!Why.IsEmpty())
+		{
+			AddTranscriptLine(Why);
+		}
+		Handoff.Reset();
+		HandoffTicker.Reset();
+		return false;
+	};
+	if (!Handoff.IsSet())
+	{
+		return Stop(FString());
+	}
+	FHandoff& Current = Handoff.GetValue();
+	const TSharedPtr<SHyperAIStudioQuickActionWindow> Builder = Current.Builder.Pin();
+	FString BuilderAgent;
+	FString BuilderModel;
+	constexpr double MaxHandoffSeconds = 3.0 * 60.0 * 60.0;
+	if (!Builder.IsValid() || !Builder->GetRunningAgent(BuilderAgent, BuilderModel)
+		|| FPlatformTime::Seconds() - Current.StartedTime > MaxHandoffSeconds)
+	{
+		return Stop(FString::Printf(TEXT("Handoff stopped: %s closed, stopped its agent, or three hours passed."), *Current.BuilderDescription));
+	}
+
+	// A file counts as written once it exists and its size held for a tick; agents write it in one go.
+	const int64 Size = IFileManager::Get().FileSize(Current.bBuilding ? *Current.ResultPath : *Current.PlanPath);
+	const bool bWritten = Size > 0 && Size == Current.LastSize;
+	Current.LastSize = Size;
+	if (!bWritten)
+	{
+		return true;
+	}
+	if (!Current.bBuilding)
+	{
+		const FString Prompt = FString::Printf(
+			TEXT("Implement the plan in %s, written by %s. Follow its steps with the HyperAI tools (dry run, then apply). ")
+			TEXT("When you are done, write what you changed, and anything you could not do, to %s."),
+			*Current.PlanPath, *GetTabDescription(), *Current.ResultPath);
+		if (!Builder->DeliverHandoffPrompt(Prompt, TEXT("handoff plan")))
+		{
+			return Stop(FString::Printf(TEXT("Handoff stopped: %s is not at its prompt. The plan is in %s."), *Current.BuilderDescription, *Current.PlanPath));
+		}
+		Current.bBuilding = true;
+		Current.LastSize = -1;
+		AddTranscriptLine(FString::Printf(TEXT("Plan written; %s is implementing it."), *Current.BuilderDescription));
+		return true;
+	}
+	const FString Prompt = FString::Printf(
+		TEXT("%s finished your plan in %s and reported in %s. Review the work: inspect the assets it changed, compare them with the plan, and report anything missing or wrong."),
+		*Current.BuilderDescription, *Current.PlanPath, *Current.ResultPath);
+	DeliverHandoffPrompt(Prompt, TEXT("review request"));
+	return Stop(FString::Printf(TEXT("%s finished; review requested here."), *Current.BuilderDescription));
+}
+
+bool SHyperAIStudioQuickActionWindow::DeliverHandoffPrompt(const FString& Text, const FString& Label)
+{
+	// A hidden tab's state is from when it was last on screen; an agent does not start work on its own, so an
+	// idle reading stays true until something is sent to it.
+	const bool bSend = GetDefault<UHyperAIStudioSettings>()->bAutoSendHandoffPrompts && AgentState.State == EHyperAIStudioAgentState::Idle;
+	if (!InsertIntoAgentPrompt(Text, Label, /*bFocusTerminal=*/false))
+	{
+		return false;
+	}
+	if (bSend)
+	{
+		// Enter goes a beat after the paste so the agent has taken the text first. The core ticker runs even
+		// while this tab is hidden, when its widget timers would not.
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateSPLambda(this, [this](float)
+		{
+			const uint8 Enter = 0x0D;
+			if (TerminalWidget.IsValid() && TerminalWidget->IsSessionRunning())
+			{
+				HyperAIStudio::TerminalRawInput::WriteRawBytes(*TerminalWidget, TConstArrayView<uint8>(&Enter, 1));
+			}
+			return false;
+		}), 0.4f);
+		AddTranscriptLine(FString::Printf(TEXT("Sent the %s."), *Label));
+	}
+	else
+	{
+		AddTranscriptLine(FString::Printf(TEXT("The %s is typed into the prompt; press Enter to send it."), *Label));
+	}
+	if (const TSharedPtr<SDockTab> Tab = OwnerTab.Pin())
+	{
+		FGlobalTabmanager::Get()->DrawAttention(Tab.ToSharedRef());
+	}
 	return true;
 }
 
@@ -1192,11 +1580,14 @@ void SHyperAIStudioQuickActionWindow::SelectModel(FString ModelId)
 	const FString AgentName = GetSelectedAgentName();
 	UHyperAIStudioSettings* Settings = GetMutableDefault<UHyperAIStudioSettings>();
 	FHyperAIStudioAgentModelRoute* Route = Settings->FindAgentModelRoute(AgentName);
-	if (!Route || Route->SelectedModel == ModelId)
+	if (!Route || GetModelForAgent(AgentName) == ModelId)
 	{
 		return;
 	}
 
+	// This tab starts with it; the saved choice is what new tabs start with.
+	TabModel = ModelId;
+	TabModelAgent = AgentName;
 	Route->SelectedModel = ModelId;
 	Settings->SaveConfig();
 
@@ -1218,17 +1609,16 @@ void SHyperAIStudioQuickActionWindow::SelectModel(FString ModelId)
 
 bool SHyperAIStudioQuickActionWindow::IsModelSelected(FString ModelId) const
 {
-	const FHyperAIStudioAgentModelRoute* Route = GetDefault<UHyperAIStudioSettings>()->FindAgentModelRoute(GetSelectedAgentName());
-	return Route ? Route->SelectedModel == ModelId : ModelId.IsEmpty();
+	return GetModelForAgent(GetSelectedAgentName()) == ModelId;
 }
 
 FText SHyperAIStudioQuickActionWindow::GetModelButtonText() const
 {
-	const FHyperAIStudioAgentModelRoute* Route = GetDefault<UHyperAIStudioSettings>()->FindAgentModelRoute(GetSelectedAgentName());
+	const FString Model = GetModelForAgent(GetSelectedAgentName());
 	return FText::Format(LOCTEXT("ModelButton", "Model: {0}"),
-		!Route || Route->SelectedModel.IsEmpty() ? LOCTEXT("ModelDefault", "Default")
-		: Route->SelectedModel == UHyperAIStudioSettings::SmartModelId ? LOCTEXT("ModelSmart", "Smart")
-		: FText::FromString(Route->SelectedModel));
+		Model.IsEmpty() ? LOCTEXT("ModelDefault", "Default")
+		: Model == UHyperAIStudioSettings::SmartModelId ? LOCTEXT("ModelSmart", "Smart")
+		: FText::FromString(Model));
 }
 
 TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildAgentSelector()
@@ -1381,10 +1771,14 @@ void SHyperAIStudioQuickActionWindow::RefreshAgentOptions()
 	}
 
 	const FString PreviousAgent = GetSelectedAgentName();
-	if (UHyperAIStudioSettings* MutableSettings = GetMutableDefault<UHyperAIStudioSettings>();
-		MutableSettings && MutableSettings->EnsureDefaultAgentModelRoutes())
+	if (UHyperAIStudioSettings* MutableSettings = GetMutableDefault<UHyperAIStudioSettings>())
 	{
-		MutableSettings->SaveConfig();
+		const bool bSeededModels = MutableSettings->EnsureDefaultAgentModelRoutes();
+		const bool bSeededTasks = MutableSettings->EnsureDefaultTaskRoutes();
+		if (bSeededModels || bSeededTasks)
+		{
+			MutableSettings->SaveConfig();
+		}
 	}
 	const UHyperAIStudioSettings* Settings = GetDefault<UHyperAIStudioSettings>();
 	const FString PreferredAgent = Settings ? Settings->PreferredAgent : FString();
@@ -1511,11 +1905,17 @@ void SHyperAIStudioQuickActionWindow::SetOwnerTab(const TSharedRef<SDockTab>& In
 	InTab->SetLabel(GetTabLabel());
 }
 
-FText SHyperAIStudioQuickActionWindow::GetTabLabel() const
+FText SHyperAIStudioQuickActionWindow::GetTabTitle() const
 {
 	const FText Base = TabIndex <= 1
 		? LOCTEXT("TabLabelFirst", "HyperAI Chat")
 		: FText::Format(LOCTEXT("TabLabelNumbered", "HyperAI Chat {0}"), TabIndex);
+	return RouteCategory.IsEmpty() ? Base : FText::Format(LOCTEXT("TabTitleRouted", "{0}: {1}"), Base, FText::FromString(RouteCategory));
+}
+
+FText SHyperAIStudioQuickActionWindow::GetTabLabel() const
+{
+	const FText Base = GetTabTitle();
 	// The tab label is what you read when the panel is not on screen, so the state belongs in it.
 	if (AgentState.State == EHyperAIStudioAgentState::Stopped || AgentState.Label.IsEmpty())
 	{
@@ -1565,10 +1965,10 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunAgentStateHeartbeat(d
 void SHyperAIStudioQuickActionWindow::AutoAcceptSmartPlan(const FString& Tail, const double LastOutputTime)
 {
 	const UHyperAIStudioSettings* Settings = GetDefault<UHyperAIStudioSettings>();
-	const FHyperAIStudioAgentModelRoute* Route = Settings->FindAgentModelRoute(ActiveTerminalAgentName);
+	// The model this terminal launched with, not the saved choice, which another tab may have changed since.
 	const bool bSmart = Settings->bAutoAcceptPlansInSmartMode
 		&& UHyperAIStudioSettings::IsSmartModelAgent(ActiveTerminalAgentName)
-		&& Route && Route->SelectedModel == UHyperAIStudioSettings::SmartModelId;
+		&& ActiveTerminalModel == UHyperAIStudioSettings::SmartModelId;
 	const FHyperAIStudioPlanApprovalChoice Choice = bSmart
 		? FHyperAIStudioAgentStateEvaluator::FindPlanAutoApprovalChoice(Tail)
 		: FHyperAIStudioPlanApprovalChoice();
@@ -1683,13 +2083,17 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunDeferredTerminalStart
 	}
 
 	const FString AgentName = GetSelectedAgentName();
-	if (const FHyperAIStudioAgentModelRoute* ModelRoute = GetDefault<UHyperAIStudioSettings>()->FindAgentModelRoute(AgentName))
+	FString LaunchModel = GetModelForAgent(AgentName);
+	if (const FHyperAIStudioAgentModelRoute* SavedRoute = GetDefault<UHyperAIStudioSettings>()->FindAgentModelRoute(AgentName))
 	{
+		FHyperAIStudioAgentModelRoute ModelRoute = *SavedRoute;
+		ModelRoute.SelectedModel = LaunchModel;
 		FString ModelPrefix;
 		FString ModelArgument;
 		FString ModelError;
-		if (!GetDefault<UHyperAIStudioSettings>()->TryResolveModelLaunch(*ModelRoute, ModelPrefix, ModelArgument, ModelError))
+		if (!GetDefault<UHyperAIStudioSettings>()->TryResolveModelLaunch(ModelRoute, ModelPrefix, ModelArgument, ModelError))
 		{
+			LaunchModel.Reset();
 			LastMessage = FText::FromString(ModelError + TEXT(" Starting with the agent's default model."));
 			AddTranscriptLine(LastMessage.ToString());
 		}
@@ -1700,6 +2104,7 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunDeferredTerminalStart
 	ResumeSessionId.Reset();
 	bTerminalStartupSent = true;
 	ActiveTerminalAgentName = AgentName;
+	ActiveTerminalModel = LaunchModel;
 	Invalidate(EInvalidateWidgetReason::Paint);
 	return EActiveTimerReturnType::Stop;
 }
@@ -1796,12 +2201,14 @@ FString SHyperAIStudioQuickActionWindow::GetTerminalLaunchCommandForAgent(const 
 		{
 			LaunchCommand += TEXT(" ") + ResumeArguments;
 		}
-		const FHyperAIStudioAgentModelRoute* ModelRoute = GetDefault<UHyperAIStudioSettings>()->FindAgentModelRoute(Route->Name);
+		const FHyperAIStudioAgentModelRoute* SavedRoute = GetDefault<UHyperAIStudioSettings>()->FindAgentModelRoute(Route->Name);
+		FHyperAIStudioAgentModelRoute ModelRoute = SavedRoute ? *SavedRoute : FHyperAIStudioAgentModelRoute();
+		ModelRoute.SelectedModel = GetModelForAgent(Route->Name);
 		FString ModelPrefix;
 		FString ModelArgument;
 		FString ModelError;
-		if (!LaunchCommand.IsEmpty() && ModelRoute
-			&& GetDefault<UHyperAIStudioSettings>()->TryResolveModelLaunch(*ModelRoute, ModelPrefix, ModelArgument, ModelError)
+		if (!LaunchCommand.IsEmpty() && SavedRoute
+			&& GetDefault<UHyperAIStudioSettings>()->TryResolveModelLaunch(ModelRoute, ModelPrefix, ModelArgument, ModelError)
 			&& !ModelArgument.IsEmpty())
 		{
 			LaunchCommand = ModelPrefix + LaunchCommand + TEXT(" ") + ModelArgument;

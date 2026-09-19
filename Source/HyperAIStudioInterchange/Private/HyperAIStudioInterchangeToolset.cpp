@@ -1,6 +1,7 @@
 // Games by Hyper 2026.
 
 #include "HyperAIStudioInterchangeToolset.h"
+#include "HyperAIStudioAgentActivity.h"
 
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -1292,7 +1293,7 @@ FHyperAIInterchangeApplyPlanReport FHyperAIStudioInterchangeContracts::BuildPlan
 	if (Snapshot.Asset.PersistedRevision != Request.ExpectedPersistedRevision)
 	{
 		return Reject(TEXT("stale_revision"),
-			TEXT("The fresh loaded-only persisted provenance revision does not match the assertion."));
+			*(TEXT("The fresh loaded-only persisted provenance revision does not match the assertion.") + FHyperAIStudioAgentActivityLog::DescribeLastChange(Request.TargetPath)));
 	}
 	const FHyperAIInterchangeSourceRecord* Current = Snapshot.Sources.FindByPredicate(
 		[&](const FHyperAIInterchangeSourceRecord& Candidate)

@@ -1,6 +1,7 @@
 // Games by Hyper 2026.
 
 #include "HyperAIStudioLightingToolset.h"
+#include "HyperAIStudioAgentActivity.h"
 
 #include "Editor.h"
 #include "Engine/Engine.h"
@@ -566,7 +567,7 @@ FHyperAILightingApplyPlanReport FHyperAIStudioLightingContracts::BuildPlan(const
 	Report.BaseRevision = Gate::ComputeRevision(*World);
 	if (Report.BaseRevision != Request.ExpectedRevision)
 	{
-		return Reject(TEXT("stale_revision"), TEXT("The level's lighting changed after inspection; inspect again."));
+		return Reject(TEXT("stale_revision"), TEXT("The level's lighting changed after inspection; inspect again.") + FHyperAIStudioAgentActivityLog::DescribeLastChange(Report.LevelPath));
 	}
 	if (Request.bSave && World->GetOutermost()->GetName().StartsWith(TEXT("/Temp/")))
 	{

@@ -1,6 +1,7 @@
 // Games by Hyper 2026.
 
 #include "HyperAIStudioMaterialsToolset.h"
+#include "HyperAIStudioAgentActivity.h"
 
 #include "AssetRegistry/IAssetRegistry.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -4028,7 +4029,8 @@ FHyperAIMaterialApplyPlanReport FHyperAIStudioMaterialsContracts::BuildPlan(
 				}
 				if (Snapshot.Revision != Operation.ExpectedRevision)
 				{
-					AddError(TEXT("stale_revision"), TEXT("The material changed since you inspected it; inspect again for its current revision and node ids."));
+					AddError(TEXT("stale_revision"), TEXT("The material changed since you inspected it; inspect again for its current revision and node ids.")
+						+ FHyperAIStudioAgentActivityLog::DescribeLastChange(Operation.TargetPath));
 					break;
 				}
 				if (Snapshot.Record.bCompiling)

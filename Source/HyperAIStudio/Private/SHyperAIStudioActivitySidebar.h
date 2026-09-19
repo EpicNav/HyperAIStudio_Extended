@@ -36,6 +36,7 @@ private:
 		TSharedPtr<FHyperAIStudioPendingApproval> Approval;
 		TSharedPtr<FHyperAIStudioAsyncJobStatus> Job;
 		TSharedPtr<FHyperAIStudioActivityEntry> Entry;
+		TSharedPtr<FHyperAIStudioAgentScore> Score;
 		FText Heading;
 	};
 	using FRowPtr = TSharedPtr<FRow>;
@@ -45,6 +46,7 @@ private:
 	TSharedRef<SWidget> BuildApprovalCard(const FHyperAIStudioPendingApproval& Approval);
 	TSharedRef<SWidget> BuildJobRow(const FHyperAIStudioAsyncJobStatus& Job);
 	TSharedRef<SWidget> BuildEntryRow(const FHyperAIStudioActivityEntry& Entry);
+	TSharedRef<SWidget> BuildScoreRow(const FHyperAIStudioAgentScore& Score);
 	static void ShowTargetInContentBrowser(const FString& Target);
 
 	FSimpleDelegate OnClose;

@@ -48,6 +48,11 @@ namespace HyperAIStudio::ActivitySidebar
 		return FText::FromString(Name.FindLastChar(TEXT('/'), Slash) ? Name.RightChop(Slash + 1) : Name);
 	}
 
+	FString AgentText(const FString& Agent, const FString& Model)
+	{
+		return Model.IsEmpty() ? Agent : FString::Printf(TEXT("%s (%s)"), *Agent, *Model);
+	}
+
 	FSlateColor StatusColor(const EHyperAIStudioActivityKind Kind)
 	{
 		switch (Kind)
@@ -196,6 +201,19 @@ void SHyperAIStudioChatActivitySidebar::Rebuild()
 		}
 	}
 
+	// The scoreboard outlives the session; the busiest rows are the ones routing leans on.
+	const TArray<FHyperAIStudioAgentScore> Scores = FHyperAIStudioAgentScoreboard::GetScores();
+	if (!Scores.IsEmpty())
+	{
+		AddHeading(LOCTEXT("RecordHeading", "Track record"));
+		for (int32 Index = 0; Index < FMath::Min(Scores.Num(), 8); ++Index)
+		{
+			FRow Row;
+			Row.Score = MakeShared<FHyperAIStudioAgentScore>(Scores[Index]);
+			Rows.Add(MakeShared<FRow>(MoveTemp(Row)));
+		}
+	}
+
 	const TArray<FHyperAIStudioActivityEntry> Entries = FHyperAIStudioAgentActivityLog::GetSnapshot();
 	if (!Entries.IsEmpty())
 	{
@@ -228,6 +246,10 @@ TSharedRef<ITableRow> SHyperAIStudioChatActivitySidebar::GenerateRow(FRowPtr Row
 	else if (Row->Entry.IsValid())
 	{
 		Content = BuildEntryRow(*Row->Entry);
+	}
+	else if (Row->Score.IsValid())
+	{
+		Content = BuildScoreRow(*Row->Score);
 	}
 	else
 	{
@@ -383,7 +405,8 @@ TSharedRef<SWidget> SHyperAIStudioChatActivitySidebar::BuildEntryRow(const FHype
 			SNew(STextBlock)
 			.Text(FText::Format(LOCTEXT("EntryLine", "{0}: {1}"),
 				FText::FromString(FHyperAIStudioAgentActivityLog::LexToString(Entry.Kind)), FText::FromString(Entry.ToolName)))
-			.ToolTipText(FText::FromString(Entry.Detail.IsEmpty() ? Entry.StatusCode : Entry.Detail))
+			.ToolTipText(FText::FromString((Entry.Detail.IsEmpty() ? Entry.StatusCode : Entry.Detail)
+				+ (Entry.Agent.IsEmpty() ? FString() : TEXT("\nBy ") + AgentText(Entry.Agent, Entry.Model))))
 			.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
 			.ColorAndOpacity(StatusColor(Entry.Kind))
 		]
@@ -392,7 +415,8 @@ TSharedRef<SWidget> SHyperAIStudioChatActivitySidebar::BuildEntryRow(const FHype
 		.VAlign(VAlign_Center)
 		[
 			SNew(STextBlock)
-			.Text(RelativeTime(Entry.Utc))
+			.Text(Entry.Agent.IsEmpty() ? RelativeTime(Entry.Utc)
+				: FText::Format(LOCTEXT("EntryAgentTime", "{0}, {1}"), FText::FromString(Entry.Agent), RelativeTime(Entry.Utc)))
 			.Font(FAppStyle::GetFontStyle("SmallFont"))
 			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 		];
@@ -426,6 +450,33 @@ TSharedRef<SWidget> SHyperAIStudioChatActivitySidebar::BuildEntryRow(const FHype
 				.Font(FAppStyle::GetFontStyle("SmallFont"))
 				.ColorAndOpacity(FStyleColors::AccentBlue)
 			]
+		];
+}
+
+TSharedRef<SWidget> SHyperAIStudioChatActivitySidebar::BuildScoreRow(const FHyperAIStudioAgentScore& Score)
+{
+	using namespace HyperAIStudio::ActivitySidebar;
+	const float Rate = Score.Total() > 0 ? static_cast<float>(Score.Completed) / Score.Total() : 0.0f;
+	return SNew(SHorizontalBox)
+		.ToolTipText(FText::Format(LOCTEXT("ScoreTooltip", "{0} on {1}: {2} completed, {3} failed, {4} rejected by you. The new-tab menu picks agents by this record."),
+			FText::FromString(AgentText(Score.Agent, Score.Model)), FText::FromString(Score.PackId),
+			Score.Completed, Score.Failed, Score.Rejected))
+		+ SHorizontalBox::Slot()
+		.FillWidth(1.0f)
+		[
+			SNew(STextBlock)
+			.Text(FText::Format(LOCTEXT("ScoreLine", "{0} - {1}"), FText::FromString(AgentText(Score.Agent, Score.Model)), FText::FromString(Score.PackId)))
+			.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(6.0f, 0.0f, 0.0f, 0.0f)
+		[
+			SNew(STextBlock)
+			.Text(FText::Format(LOCTEXT("ScoreCount", "{0} of {1}"), Score.Completed, Score.Total()))
+			.Font(FAppStyle::GetFontStyle("SmallFont"))
+			.ColorAndOpacity(Rate >= 0.8f ? FStyleColors::AccentGreen : Rate >= 0.5f ? FStyleColors::AccentYellow : FStyleColors::AccentRed)
 		];
 }
 

@@ -1,6 +1,7 @@
 // Games by Hyper 2026.
 
 #include "HyperAIStudioTextureGraphToolset.h"
+#include "HyperAIStudioAgentActivity.h"
 
 #include "Engine/Engine.h"
 #include "FileHelpers.h"
@@ -599,7 +600,7 @@ FHyperAITextureGraphValidateReport FHyperAIStudioTextureGraphContracts::Validate
 	Report.Revision = Gate::ComputeRevision(*Graph);
 	if (!Request.ExpectedRevision.IsEmpty() && Request.ExpectedRevision != Report.Revision)
 	{
-		return Reject(TEXT("stale_revision"), TEXT("The graph changed since that revision; inspect it again."));
+		return Reject(TEXT("stale_revision"), TEXT("The graph changed since that revision; inspect it again.") + FHyperAIStudioAgentActivityLog::DescribeLastChange(Request.TargetPath));
 	}
 	Report.ExportsInFlight = Gate::CountExportsInFlight();
 	Report.Outputs = Gate::ReadOutputs(*Graph);
@@ -734,7 +735,7 @@ FHyperAITextureGraphApplyPlanReport FHyperAIStudioTextureGraphContracts::BuildPl
 		Report.BaseRevision = Gate::ComputeRevision(*Graph);
 		if (Report.BaseRevision != Request.ExpectedRevision)
 		{
-			return Reject(TEXT("stale_revision"), TEXT("The graph changed after inspection; inspect it again."));
+			return Reject(TEXT("stale_revision"), TEXT("The graph changed after inspection; inspect it again.") + FHyperAIStudioAgentActivityLog::DescribeLastChange(Request.TargetPath));
 		}
 		if (Gate::IsOpenInEditor(*Graph))
 		{

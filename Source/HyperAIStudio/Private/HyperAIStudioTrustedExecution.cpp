@@ -4,6 +4,7 @@
 
 #include "HyperAIStudioTrustedExecutionInternal.h"
 
+#include "HyperAIStudioAgentActivity.h"
 #include "HyperAIStudioExtensionRuntime.h"
 #include "HyperAIStudioOperationJournal.h"
 #include "HyperAIStudioTypedArtifactExecutionInternal.h"
@@ -2722,6 +2723,18 @@ bool FHyperAIStudioTrustedExecutionHost::StageExact(
 		bDurableReplay
 			? TEXT("Exact durable operation stage receipt was recovered.")
 			: TEXT("Exact admitted artifact is staged; no mutation has been dispatched."));
+	if (!bDurableReplay && Exact->Request.Safety != EHyperAIStudioDomainSafety::Read)
+	{
+		// The receipt carries no target, so the activity log keeps it from here for the outcome entry.
+		FHyperAIStudioActivityEntry Entry;
+		Entry.Kind = EHyperAIStudioActivityKind::Submitted;
+		Entry.PackId = OutReceipt.PackId;
+		Entry.ToolName = OutReceipt.ToolName;
+		Entry.Target = Exact->Request.EffectTarget;
+		Entry.OperationId = OutReceipt.OperationId;
+		Entry.StatusCode = TEXT("staged");
+		FHyperAIStudioAgentActivityLog::Record(MoveTemp(Entry));
+	}
 	return true;
 }
 

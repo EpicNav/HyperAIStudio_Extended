@@ -1,6 +1,7 @@
 // Games by Hyper 2026.
 
 #include "HyperAIStudioPhysicsToolset.h"
+#include "HyperAIStudioAgentActivity.h"
 
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -1955,7 +1956,7 @@ FHyperAIPhysicsApplyPlanReport FHyperAIStudioPhysicsContracts::BuildPlan(
 	if (Snapshot.Asset.PersistedRevision != Request.ExpectedPersistedRevision)
 	{
 		return Reject(TEXT("stale_revision"),
-			TEXT("The exact loaded PhysicsAsset changed after inspection."));
+			*(TEXT("The exact loaded PhysicsAsset changed after inspection.") + FHyperAIStudioAgentActivityLog::DescribeLastChange(Request.TargetPath)));
 	}
 
 	bool bNoOp = true;
