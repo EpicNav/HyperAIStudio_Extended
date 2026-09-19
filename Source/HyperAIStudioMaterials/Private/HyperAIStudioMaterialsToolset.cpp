@@ -4,24 +4,39 @@
 
 #include "AssetRegistry/IAssetRegistry.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "Containers/Ticker.h"
 #include "CoreGlobals.h"
 #include "Engine/Engine.h"
+#include "FileHelpers.h"
+#include "HyperAIStudioApprovalGate.h"
+#include "HyperAIStudioAsyncJobHost.h"
 #include "HyperAIStudioCapabilityRuntimeIndex.h"
 #include "HyperAIStudioExtensionRuntime.h"
+#include "HyperAIStudioMaterialsGraphGate.h"
+#include "HyperAIStudioResultPreview.h"
+#include "HyperAIStudioSettings.h"
 #include "Internationalization/Text.h"
+#include "MaterialEditingLibrary.h"
+#include "MaterialShared.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionAdd.h"
 #include "Materials/MaterialExpressionConstant.h"
+#include "Materials/MaterialExpressionCustom.h"
 #include "Materials/MaterialExpressionFunctionInput.h"
 #include "Materials/MaterialExpressionFunctionOutput.h"
 #include "Materials/MaterialExpressionMultiply.h"
+#include "Materials/MaterialExpressionParameter.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
+#include "Materials/MaterialExpressionTextureSampleParameter.h"
 #include "Materials/MaterialExpressionVectorParameter.h"
 #include "Materials/MaterialFunction.h"
+#include "Materials/MaterialInstanceConstant.h"
 #include "Misc/CoreDelegates.h"
 #include "Misc/PackageName.h"
+#include "Misc/ScopeExit.h"
 #include "Modules/ModuleManager.h"
 #include "RHI.h"
+#include "ScopedTransaction.h"
 #include "ToolsetRegistry/UToolsetRegistry.h"
 #include "UObject/Package.h"
 #include "UObject/SoftObjectPath.h"
@@ -189,7 +204,8 @@ namespace HyperAIStudio::Materials::Private
 		if (Expression->GetClass() == UMaterialExpressionMultiply::StaticClass()) return TEXT("multiply");
 		if (Expression->GetClass() == UMaterialExpressionFunctionInput::StaticClass()) return TEXT("function_input");
 		if (Expression->GetClass() == UMaterialExpressionFunctionOutput::StaticClass()) return TEXT("function_output");
-		return TEXT("other");
+		const FString Kind = HyperAIStudio::Materials::Gate::KindOf(*Expression);
+		return Kind.IsEmpty() ? TEXT("opaque") : Kind;
 	}
 
 	bool CaptureSemanticText(const FString& Value, FString& OutValue)
@@ -408,7 +424,12 @@ namespace HyperAIStudio::Materials::Private
 			View.SortPriority = Output->SortPriority;
 			View.bFunctionOutputLastPreviewed = Output->bLastPreviewed;
 		}
-		else bComplete = false;
+		// Catalog kinds expose their typed keys. Opaque nodes keep only pins and wiring; the record seals the saved
+		// package hash for them instead, so an edit to one still changes the revision once saved.
+		else if (View.Kind != TEXT("opaque"))
+		{
+			View.Properties = HyperAIStudio::Materials::Gate::ReadProperties(*Expression, View.Kind);
+		}
 
 		if (View.Kind != TEXT("other"))
 		{
@@ -545,6 +566,13 @@ namespace HyperAIStudio::Materials::Private
 		AppendToken(Out, FString::FromInt(Node.OutputPorts.Num()));
 		for (const FHyperAIMaterialOutputPortView& Port : Node.OutputPorts)
 			AppendToken(Out, CanonicalOutputPort(Port));
+		AppendToken(Out, TEXT("properties"));
+		AppendToken(Out, FString::FromInt(Node.Properties.Num()));
+		for (const FHyperAIMaterialNodeProperty& Property : Node.Properties)
+		{
+			AppendToken(Out, Property.Key);
+			AppendToken(Out, Property.Value);
+		}
 		AppendToken(Out, BoolToken(Node.bGuidValid));
 		AppendToken(Out, BoolToken(Node.bSemanticProjectionComplete));
 		return Out;
@@ -602,14 +630,33 @@ namespace HyperAIStudio::Materials::Private
 		AppendToken(Out, CanonicalDouble(Node.Vector.A));
 		AppendToken(Out, FString::FromInt(Node.EditorX));
 		AppendToken(Out, FString::FromInt(Node.EditorY));
+		AppendToken(Out, FString::FromInt(Node.Properties.Num()));
+		for (const FHyperAIMaterialNodeProperty& Property : Node.Properties)
+		{
+			AppendToken(Out, Property.Key);
+			AppendToken(Out, Property.Value);
+		}
+		AppendToken(Out, Node.Justification);
 		return Out;
+	}
+
+	const TCHAR* OperationTypeName(const EHyperAIStudioMaterialOperationKind Kind)
+	{
+		switch (Kind)
+		{
+		case EHyperAIStudioMaterialOperationKind::CompoundCreateConfigureGraph: return TEXT("compound_create_configure_graph");
+		case EHyperAIStudioMaterialOperationKind::RepairSemanticGraph: return TEXT("repair_semantic_graph");
+		case EHyperAIStudioMaterialOperationKind::CreateMaterial: return TEXT("create_material");
+		case EHyperAIStudioMaterialOperationKind::EditGraph: return TEXT("edit_graph");
+		case EHyperAIStudioMaterialOperationKind::CreateMaterialInstance: return TEXT("create_material_instance");
+		default: return TEXT("set_instance_parameters");
+		}
 	}
 
 	FString CanonicalBackendOperation(const FHyperAIStudioMaterialBackendOperation& Operation)
 	{
 		FString Out;
-		AppendToken(Out, Operation.Kind == EHyperAIStudioMaterialOperationKind::CompoundCreateConfigureGraph
-			? TEXT("compound_create_configure_graph") : TEXT("repair_semantic_graph"));
+		AppendToken(Out, OperationTypeName(Operation.Kind));
 		AppendToken(Out, Operation.TargetPath);
 		AppendToken(Out, Operation.TargetFamily);
 		AppendToken(Out, Operation.ExpectedRevision);
@@ -633,6 +680,36 @@ namespace HyperAIStudio::Materials::Private
 		AppendToken(Out, TEXT("repair_kinds"));
 		AppendToken(Out, FString::FromInt(Operation.RepairKinds.Num()));
 		for (const FString& Repair : Operation.RepairKinds) AppendToken(Out, Repair);
+		// Order matters in every list below: edit_graph applies them in sequence.
+		AppendToken(Out, TEXT("remove")); AppendToken(Out, FString::FromInt(Operation.RemoveNodeIds.Num()));
+		for (const FString& Id : Operation.RemoveNodeIds) AppendToken(Out, Id);
+		AppendToken(Out, TEXT("disconnect")); AppendToken(Out, FString::FromInt(Operation.Disconnects.Num()));
+		for (const FHyperAIMaterialEdgeSpec& Cut : Operation.Disconnects)
+		{
+			AppendToken(Out, Cut.ToNodeId);
+			AppendToken(Out, Cut.ToInput);
+		}
+		AppendToken(Out, TEXT("property_edits")); AppendToken(Out, FString::FromInt(Operation.PropertyEdits.Num()));
+		for (const FHyperAIMaterialPropertyEdit& Edit : Operation.PropertyEdits)
+		{
+			AppendToken(Out, Edit.NodeId);
+			AppendToken(Out, Edit.Key);
+			AppendToken(Out, Edit.Value);
+		}
+		AppendToken(Out, TEXT("settings")); AppendToken(Out, FString::FromInt(Operation.MaterialSettings.Num()));
+		for (const FHyperAIMaterialNodeProperty& Setting : Operation.MaterialSettings)
+		{
+			AppendToken(Out, Setting.Key);
+			AppendToken(Out, Setting.Value);
+		}
+		AppendToken(Out, TEXT("parent")); AppendToken(Out, Operation.ParentPath);
+		AppendToken(Out, TEXT("parameters")); AppendToken(Out, FString::FromInt(Operation.Parameters.Num()));
+		for (const FHyperAIMaterialParameterValue& Parameter : Operation.Parameters)
+		{
+			AppendToken(Out, Parameter.Name);
+			AppendToken(Out, Parameter.Type);
+			AppendToken(Out, Parameter.Value);
+		}
 		return Out;
 	}
 
@@ -1501,6 +1578,16 @@ namespace HyperAIStudio::Materials::Private
 			CaptureExec(Collection.ExpressionExecBegin, Record.ExpressionExecBeginStableId);
 			CaptureExec(Collection.ExpressionExecEnd, Record.ExpressionExecEndStableId);
 		}
+		for (const FHyperAIMaterialNodeView& Node : Record.Nodes)
+		{
+			Record.OpaqueNodeCount += Node.Kind == TEXT("opaque") ? 1 : 0;
+			if (Node.Kind == TEXT("custom_hlsl")) Record.CustomHlslNodeIds.Add(Node.StableId);
+		}
+		if (Record.OpaqueNodeCount > 0)
+		{
+			Record.PackageSavedHash = LexToString(Object->GetOutermost()->GetSavedHash());
+			bComplete &= !Record.bPackageDirty;
+		}
 		Record.EdgeCount = TotalEdges;
 		Record.bRevisionComplete = bComplete && !Record.bGraphTruncated;
 		Snapshot.bComplete = Record.bRevisionComplete;
@@ -1540,7 +1627,8 @@ namespace HyperAIStudio::Materials::Private
 			|| !Add(BoolToken(Record.bCompileError))
 			|| !Add(FString::Printf(TEXT("%lld"), Record.DiskSize))
 			|| !Add(Record.ReferenceEvidence) || !Add(Record.ExpressionExecBeginStableId)
-			|| !Add(Record.ExpressionExecEndStableId))
+			|| !Add(Record.ExpressionExecEndStableId)
+			|| !Add(FString::FromInt(Record.OpaqueNodeCount)) || !Add(Record.PackageSavedHash))
 			return false;
 			if (!Add(TEXT("nodes")) || !Add(FString::FromInt(Record.Nodes.Num()))
 				|| !TryAppendSortedElementHashes(Canonical, Utf8Bytes, Record.Nodes,
@@ -1862,13 +1950,19 @@ TArray<FHyperAIMaterialCapabilityStatus> FHyperAIStudioMaterialsContracts::GetCa
 {
 	FHyperAIMaterialCapabilityStatus Material;
 	Material.Family = TEXT("material");
-	Material.bCompoundBackendImplemented = false;
+	Material.bCompoundBackendImplemented = true;
 	Material.SupportedCases = {
 		TEXT("exact_loaded_persisted_semantic_snapshot"),
 		TEXT("bounded_exact_on_disk_identity_without_load"),
 		TEXT("semantic_graph_diff_by_expression_guid"),
 		TEXT("independent_guid_edge_cycle_reachability_validation"),
-		TEXT("pure_non_executable_compound_and_repair_shadow_evidence")};
+		TEXT("node_catalog_graph_authoring"),
+		TEXT("create_material_and_edit_graph_at_revision"),
+		TEXT("material_instances_and_parameters"),
+		TEXT("authoring_mode_nodes_hlsl_hybrid"),
+		TEXT("compile_statistics_and_preview_png"),
+		TEXT("journaled_apply_compile_validate_save_fresh_verify"),
+		TEXT("pure_repair_shadow_evidence")};
 	Material.DelegatedEpicCases = {
 		TEXT("create_material"), TEXT("list_expression_classes"), TEXT("add_expression"),
 		TEXT("delete_expression"), TEXT("get_expressions"), TEXT("layout_expressions"),
@@ -1885,9 +1979,11 @@ TArray<FHyperAIMaterialCapabilityStatus> FHyperAIStudioMaterialsContracts::GetCa
 		TEXT("synchronous_asset_load"),
 		TEXT("unbounded_asset_registry_scan"),
 		TEXT("standalone_add_connect_delete_or_recompile_duplicates"),
-		TEXT("compound_or_repair_mutation_without_bounded_async_cas_backend")};
-	Material.State = TEXT("source_candidate_non_executable_backend_required");
-	Material.Remediation = TEXT("bounded_compile_or_runtime_cas_backend_required");
+		TEXT("repair_semantic_graph_execution"),
+		TEXT("expression_classes_outside_the_node_catalog_created_or_configured"),
+		TEXT("target_open_in_material_editor")};
+	Material.State = TEXT("source_candidate_executable");
+	Material.Remediation = TEXT("Inspect for the revision and node ids, dry-run apply_plan, resubmit with operation_id and expected_plan_hash, poll hyper_operation_status, then hyper_material_validate for stats and the preview PNG. Close the material's editor tab first.");
 
 	FHyperAIMaterialCapabilityStatus Function;
 	Function.Family = TEXT("material_function");
@@ -1914,14 +2010,52 @@ TArray<FHyperAIMaterialCapabilityStatus> FHyperAIStudioMaterialsContracts::GetCa
 FString FHyperAIStudioMaterialsContracts::PayloadSchemaFingerprint()
 {
 	static const FString Fingerprint = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(
-		TEXT("material.payload.v1|closed_operation|exact_family|target|cas|nodes|edges|outputs|repairs|deep_clone|bounded"));
+		TEXT("material.payload.v2|closed_operation|exact_family|target|cas|nodes|properties|edges|outputs|repairs|removes|disconnects|edits|settings|instances|authoring_mode|deep_clone|bounded"));
 	return Fingerprint;
+}
+
+FString FHyperAIStudioMaterialsContracts::InspectPayloadSchemaFingerprint()
+{
+	static const FString Fingerprint = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(
+		TEXT("material.inspect.payload.v1|exact_target|family|scope|compare|page|bounds"));
+	return Fingerprint;
+}
+
+FString FHyperAIStudioMaterialsContracts::ValidatePayloadSchemaFingerprint()
+{
+	static const FString Fingerprint = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(
+		TEXT("material.validate.payload.v1|exact_target|family|expected_revision|clean|bounds"));
+	return Fingerprint;
+}
+
+FString FHyperAIStudioMaterialsContracts::InspectResultSchemaFingerprint()
+{
+	static const FString Fingerprint = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(
+		TEXT("material.inspect.result.v1|revision|record|nodes|properties|edges|diff|issues|bounded"));
+	return Fingerprint;
+}
+
+FString FHyperAIStudioMaterialsContracts::ValidateResultSchemaFingerprint()
+{
+	static const FString Fingerprint = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(
+		TEXT("material.validate.result.v1|valid|revision|issues|stats|preview|custom_nodes|bounded"));
+	return Fingerprint;
+}
+
+FString FHyperAIStudioMaterialsContracts::GetAuthoringModeName()
+{
+	switch (GetDefault<UHyperAIStudioSettings>()->MaterialAuthoringMode)
+	{
+	case EHyperAIStudioMaterialAuthoringMode::Nodes: return TEXT("nodes");
+	case EHyperAIStudioMaterialAuthoringMode::Hlsl: return TEXT("hlsl");
+	default: return TEXT("hybrid");
+	}
 }
 
 FString FHyperAIStudioMaterialsContracts::ResultSchemaFingerprint()
 {
 	static const FString Fingerprint = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(
-		TEXT("material.result.v1|phase|revision|valid|error_count|bounded"));
+		TEXT("material.result.v2|phase|content_key|valid|error_count|bounded"));
 	return Fingerprint;
 }
 
@@ -1934,9 +2068,13 @@ const FHyperAIStudioDomainAdapterDescriptor& FHyperAIStudioMaterialsContracts::G
 		Value.AdapterId = TEXT("adapter.material.persisted_semantic_graph.ue58");
 		Value.SemanticVersion = TEXT("1.0.0");
 		Value.AdapterVersion = 1;
-		Value.Variants.Add({TEXT("hyper_material_apply_plan"), MutationVariantId,
+		Value.Variants.Add({InspectToolName, InspectVariantId, InspectPayloadTypeId, InspectPayloadSchemaFingerprint(),
+			InspectResultTypeId, InspectResultSchemaFingerprint(), EHyperAIStudioDomainSafety::Read});
+		Value.Variants.Add({MutationToolName, MutationVariantId,
 			PayloadTypeId, PayloadSchemaFingerprint(), ResultTypeId, ResultSchemaFingerprint(),
 			EHyperAIStudioDomainSafety::Edit});
+		Value.Variants.Add({ValidateToolName, ValidateVariantId, ValidatePayloadTypeId, ValidatePayloadSchemaFingerprint(),
+			ValidateResultTypeId, ValidateResultSchemaFingerprint(), EHyperAIStudioDomainSafety::Read});
 		Value.ContractFingerprint = FHyperAIStudioDomainAdapterRegistry::ComputeContractFingerprint(Value);
 		Value.AdapterFingerprint = FHyperAIStudioDomainAdapterRegistry::ComputeAdapterFingerprint(Value);
 		return Value;
@@ -1962,7 +2100,10 @@ bool FHyperAIStudioMaterialsContracts::ValidateOperationShape(
 		return Fail(TEXT("planning_deadline_exceeded"), TEXT("Operation validation started after its caller-owned deadline."));
 	if (Operation.Nodes.Num() > MaxNodes || Operation.Edges.Num() > MaxEdges
 		|| Operation.Outputs.Num() > 16 || Operation.RepairKinds.Num() > 3
-		|| static_cast<int64>(Operation.Edges.Num()) + Operation.Outputs.Num() > MaxEdges)
+		|| static_cast<int64>(Operation.Edges.Num()) + Operation.Outputs.Num() > MaxEdges
+		|| Operation.RemoveNodeIds.Num() > MaxNodes || Operation.Disconnects.Num() > MaxEdges
+		|| Operation.PropertyEdits.Num() > MaxNodes || Operation.MaterialSettings.Num() > 8
+		|| Operation.Parameters.Num() > MaxParametersPerPlan)
 		return Fail(TEXT("operation_collection_bound_exceeded"), TEXT("Operation collections exceed the closed pre-copy bounds."));
 	int64 MaterializedBytes = 1024;
 	auto ConsumeField = [&](const FString& Value)
@@ -1993,6 +2134,24 @@ bool FHyperAIStudioMaterialsContracts::ValidateOperationShape(
 	for (const FString& Repair : Operation.RepairKinds)
 		if (!ConsumeField(Repair))
 			return Fail(TEXT("operation_materialized_bound_exceeded"), TEXT("Repair strings exceed the closed pre-copy byte or deadline bound."));
+	bool bNewFieldsFit = ConsumeField(Operation.ParentPath);
+	for (const FHyperAIMaterialNodeSpec& Node : Operation.Nodes)
+	{
+		bNewFieldsFit &= Node.Properties.Num() <= 16 && ConsumeField(Node.Justification);
+		for (const FHyperAIMaterialNodeProperty& Property : Node.Properties)
+			bNewFieldsFit &= ConsumeField(Property.Key) && ConsumeField(Property.Value);
+	}
+	for (const FString& Id : Operation.RemoveNodeIds) bNewFieldsFit &= ConsumeField(Id);
+	for (const FHyperAIMaterialEdgeSpec& Cut : Operation.Disconnects)
+		bNewFieldsFit &= ConsumeField(Cut.ToNodeId) && ConsumeField(Cut.ToInput);
+	for (const FHyperAIMaterialPropertyEdit& Edit : Operation.PropertyEdits)
+		bNewFieldsFit &= ConsumeField(Edit.NodeId) && ConsumeField(Edit.Key) && ConsumeField(Edit.Value);
+	for (const FHyperAIMaterialNodeProperty& Setting : Operation.MaterialSettings)
+		bNewFieldsFit &= ConsumeField(Setting.Key) && ConsumeField(Setting.Value);
+	for (const FHyperAIMaterialParameterValue& Parameter : Operation.Parameters)
+		bNewFieldsFit &= ConsumeField(Parameter.Name) && ConsumeField(Parameter.Type) && ConsumeField(Parameter.Value);
+	if (!bNewFieldsFit)
+		return Fail(TEXT("operation_materialized_bound_exceeded"), TEXT("Operation strings exceed the closed pre-copy byte or deadline bound."));
 	if (!IsCanonicalProjectObjectPath(Operation.TargetPath))
 		return Fail(TEXT("invalid_target_path"), TEXT("Target must be one canonical /Game object path."));
 	if (!IsAllowedFamily(Operation.TargetFamily))
@@ -2003,7 +2162,15 @@ bool FHyperAIStudioMaterialsContracts::ValidateOperationShape(
 		OutOperation.Kind = EHyperAIStudioMaterialOperationKind::CompoundCreateConfigureGraph;
 	else if (Operation.Type == TEXT("repair_semantic_graph"))
 		OutOperation.Kind = EHyperAIStudioMaterialOperationKind::RepairSemanticGraph;
-	else return Fail(TEXT("unsupported_operation"), TEXT("Only the closed compound-create or semantic-repair operation is accepted."));
+	else if (Operation.Type == TEXT("create_material"))
+		OutOperation.Kind = EHyperAIStudioMaterialOperationKind::CreateMaterial;
+	else if (Operation.Type == TEXT("edit_graph"))
+		OutOperation.Kind = EHyperAIStudioMaterialOperationKind::EditGraph;
+	else if (Operation.Type == TEXT("create_material_instance"))
+		OutOperation.Kind = EHyperAIStudioMaterialOperationKind::CreateMaterialInstance;
+	else if (Operation.Type == TEXT("set_instance_parameters"))
+		OutOperation.Kind = EHyperAIStudioMaterialOperationKind::SetInstanceParameters;
+	else return Fail(TEXT("unsupported_operation"), TEXT("type must be create_material, edit_graph, create_material_instance, set_instance_parameters, compound_create_configure_graph or repair_semantic_graph."));
 
 	OutOperation.TargetPath = Operation.TargetPath;
 	OutOperation.TargetFamily = Operation.TargetFamily;
@@ -2012,8 +2179,70 @@ bool FHyperAIStudioMaterialsContracts::ValidateOperationShape(
 	OutOperation.Edges = Operation.Edges;
 	OutOperation.Outputs = Operation.Outputs;
 	OutOperation.RepairKinds = Operation.RepairKinds;
+	OutOperation.RemoveNodeIds = Operation.RemoveNodeIds;
+	OutOperation.Disconnects = Operation.Disconnects;
+	OutOperation.PropertyEdits = Operation.PropertyEdits;
+	OutOperation.MaterialSettings = Operation.MaterialSettings;
+	OutOperation.ParentPath = Operation.ParentPath;
+	OutOperation.Parameters = Operation.Parameters;
 	if (!IsBeforeDeadline(Deadline))
 		return Fail(TEXT("planning_deadline_exceeded"), TEXT("Operation copy exhausted its caller-owned deadline."));
+
+	const bool bNodeCatalogFieldsUsed = !Operation.RemoveNodeIds.IsEmpty() || !Operation.Disconnects.IsEmpty()
+		|| !Operation.PropertyEdits.IsEmpty() || !Operation.MaterialSettings.IsEmpty()
+		|| Operation.Nodes.ContainsByPredicate([](const FHyperAIMaterialNodeSpec& Node)
+		{
+			return !Node.Properties.IsEmpty() || !Node.Justification.IsEmpty();
+		});
+	const bool bInstanceFieldsUsed = !Operation.ParentPath.IsEmpty() || !Operation.Parameters.IsEmpty();
+	using EKind = EHyperAIStudioMaterialOperationKind;
+	if ((OutOperation.Kind == EKind::CompoundCreateConfigureGraph || OutOperation.Kind == EKind::RepairSemanticGraph)
+		&& (bNodeCatalogFieldsUsed || bInstanceFieldsUsed))
+		return Fail(TEXT("unused_operation_field"), TEXT("Node properties, edits, settings and instance fields belong to create_material, edit_graph and the instance operations."));
+	if (OutOperation.Kind == EKind::CreateMaterial || OutOperation.Kind == EKind::EditGraph)
+	{
+		if (bInstanceFieldsUsed || !Operation.RepairKinds.IsEmpty())
+			return Fail(TEXT("unused_operation_field"), TEXT("Graph operations take no parent, parameters or repair kinds."));
+		if (OutOperation.Kind == EKind::CreateMaterial
+			&& (!Operation.ExpectedRevision.IsEmpty() || Operation.Nodes.IsEmpty() || Operation.Outputs.IsEmpty()
+				|| !Operation.RemoveNodeIds.IsEmpty() || !Operation.Disconnects.IsEmpty()))
+			return Fail(TEXT("create_shape_invalid"), TEXT("create_material needs nodes and outputs, no expected_revision, and nothing to remove or disconnect."));
+		if (OutOperation.Kind == EKind::EditGraph && !IsCanonicalSha256(Operation.ExpectedRevision))
+			return Fail(TEXT("invalid_expected_revision"), TEXT("edit_graph needs the revision hyper_material_inspect reported."));
+		if (OutOperation.Kind == EKind::EditGraph && Operation.Nodes.IsEmpty() && Operation.Edges.IsEmpty()
+			&& Operation.Outputs.IsEmpty() && Operation.RemoveNodeIds.IsEmpty() && Operation.Disconnects.IsEmpty()
+			&& Operation.PropertyEdits.IsEmpty() && Operation.MaterialSettings.IsEmpty())
+			return Fail(TEXT("edit_graph_empty"), TEXT("edit_graph changes nothing."));
+		for (const FHyperAIMaterialNodeSpec& Node : Operation.Nodes)
+		{
+			if (!IsSimpleIdentifier(Node.NodeId) || !Node.Name.IsEmpty() || !Node.Group.IsEmpty()
+				|| Node.Scalar != 0.0 || !Node.Vector.Equals(FLinearColor::Black) || !IsFiniteNode(Node)
+				|| Node.Justification.Len() > 256)
+				return Fail(TEXT("invalid_node_shape"), TEXT("New nodes need a simple node_id and set values through properties; the legacy name/group/scalar/vector fields are for compound_create_configure_graph."));
+		}
+		return true;
+	}
+	if (OutOperation.Kind == EKind::CreateMaterialInstance || OutOperation.Kind == EKind::SetInstanceParameters)
+	{
+		if (!Operation.ExpectedRevision.IsEmpty() || bNodeCatalogFieldsUsed || !Operation.Nodes.IsEmpty()
+			|| !Operation.Edges.IsEmpty() || !Operation.Outputs.IsEmpty() || !Operation.RepairKinds.IsEmpty())
+			return Fail(TEXT("instance_shape_invalid"), TEXT("Instance operations take only parameters (and parent_path to create); expected_revision stays empty because parameters are set, not merged."));
+		if (OutOperation.Kind == EKind::CreateMaterialInstance && !IsCanonicalProjectObjectPath(Operation.ParentPath)
+			&& !(Operation.ParentPath.StartsWith(TEXT("/")) && FPackageName::IsValidObjectPath(Operation.ParentPath)))
+			return Fail(TEXT("invalid_parent_path"), TEXT("create_material_instance needs parent_path, an exact material or instance object path."));
+		if (OutOperation.Kind == EKind::SetInstanceParameters && Operation.Parameters.IsEmpty())
+			return Fail(TEXT("instance_shape_invalid"), TEXT("set_instance_parameters needs at least one parameter."));
+		TSet<FString> Names;
+		for (const FHyperAIMaterialParameterValue& Parameter : Operation.Parameters)
+		{
+			const FString Name = Parameter.Name.TrimStartAndEnd();
+			if (Name.IsEmpty() || Name.Len() > MaxNameCharacters || !AddUnique(Names, Name.ToLower())
+				|| !(Parameter.Type == TEXT("scalar") || Parameter.Type == TEXT("vector")
+					|| Parameter.Type == TEXT("texture") || Parameter.Type == TEXT("static_switch")))
+				return Fail(TEXT("invalid_parameter_shape"), TEXT("Parameters need a unique name and type scalar, vector, texture or static_switch."));
+		}
+		return true;
+	}
 
 		if (OutOperation.Kind == EHyperAIStudioMaterialOperationKind::CompoundCreateConfigureGraph)
 		{
@@ -2106,6 +2335,180 @@ bool FHyperAIStudioMaterialsContracts::ValidateOperationShape(
 			if (!IsAllowedRepair(Repair) || !AddUnique(Seen, Repair))
 				return Fail(TEXT("unsupported_or_duplicate_repair"), TEXT("Repair kinds must be unique members of the closed semantic repair vocabulary."));
 		}
+	}
+	return true;
+}
+
+bool FHyperAIStudioMaterialsContracts::ValidateGraphOperation(
+	const FHyperAIStudioMaterialBackendOperation& Operation,
+	const UMaterial* Existing,
+	const EHyperAIStudioMaterialAuthoringMode Mode,
+	int32& InOutCustomNodes,
+	int32& InOutCustomBytes,
+	TArray<FString>& OutCustomNodes,
+	FString& OutErrorCode,
+	FString& OutError)
+{
+	using namespace HyperAIStudio::Materials::Private;
+	namespace Gate = HyperAIStudio::Materials::Gate;
+	auto Fail = [&](const TCHAR* Code, const FString& Message)
+	{
+		OutErrorCode = Code;
+		OutError = Message;
+		return false;
+	};
+	TMap<FString, UMaterialExpression*> Nodes;
+	TMap<FString, FString> Kinds;
+	TSet<FName> ParameterNames;
+	auto ParameterNameOf = [](UMaterialExpression* Expression)
+	{
+		const UMaterialExpressionParameter* Parameter = Cast<UMaterialExpressionParameter>(Expression);
+		if (Parameter) return Parameter->ParameterName;
+		const UMaterialExpressionTextureSampleParameter* Texture = Cast<UMaterialExpressionTextureSampleParameter>(Expression);
+		return Texture ? Texture->ParameterName : FName();
+	};
+	if (Existing)
+	{
+		for (UMaterialExpression* Expression : const_cast<UMaterial*>(Existing)->GetExpressions())
+		{
+			if (!Expression) continue;
+			const FString Id = Gate::NodeIdOf(*Expression);
+			Nodes.Add(Id, Expression);
+			Kinds.Add(Id, Gate::KindOf(*Expression));
+			if (!ParameterNameOf(Expression).IsNone()) ParameterNames.Add(ParameterNameOf(Expression));
+			if (Expression->IsA<UMaterialExpressionCustom>())
+				OutCustomNodes.Add(FString::Printf(TEXT("%s: %s (already in the material)"), *Operation.TargetPath, *Id));
+		}
+	}
+	for (const FString& Id : Operation.RemoveNodeIds)
+	{
+		UMaterialExpression* const* Found = Nodes.Find(Id);
+		if (!Found) return Fail(TEXT("node_not_found"), FString::Printf(TEXT("remove: no node %s in the material."), *Id.Left(64)));
+		ParameterNames.Remove(ParameterNameOf(*Found));
+		Nodes.Remove(Id);
+	}
+	for (const FHyperAIMaterialEdgeSpec& Cut : Operation.Disconnects)
+	{
+		if (Cut.ToNodeId == TEXT("$material_output"))
+		{
+			if (Gate::OutputPropertyFromName(Cut.ToInput) == MP_MAX)
+				return Fail(TEXT("invalid_output_shape"), FString::Printf(TEXT("disconnect: '%s' is not a material output."), *Cut.ToInput.Left(64)));
+			continue;
+		}
+		UMaterialExpression* const* Found = Nodes.Find(Cut.ToNodeId);
+		if (!Found || !Gate::HasInput(**Found, Cut.ToInput))
+			return Fail(TEXT("closed_pin_not_found"), FString::Printf(TEXT("disconnect: %s has no input '%s'."), *Cut.ToNodeId.Left(64), *Cut.ToInput.Left(64)));
+	}
+
+	TMap<FString, TArray<FString>> FunctionInputs;
+	TMap<FString, TArray<FString>> FunctionOutputs;
+	for (const FHyperAIMaterialNodeSpec& Spec : Operation.Nodes)
+	{
+		if (Nodes.Contains(Spec.NodeId))
+			return Fail(TEXT("duplicate_node_id"), FString::Printf(TEXT("node_id %s is already used."), *Spec.NodeId));
+		if (!Gate::FindNodeKind(Spec.Kind))
+			return Fail(TEXT("invalid_node_shape"), FString::Printf(TEXT("'%s' is not a node kind; see the FHyperAIMaterialNodeSpec kinds."), *Spec.Kind.Left(64)));
+		FString Code;
+		if (Gate::IsCustomKind(Spec.Kind))
+		{
+			if (Mode == EHyperAIStudioMaterialAuthoringMode::Nodes)
+				return Fail(TEXT("authoring_mode_forbids_custom_hlsl"), TEXT("Materials are set to Nodes only; build this from graph nodes or change the Materials authoring mode in Settings."));
+			for (const FHyperAIMaterialNodeProperty& Property : Spec.Properties)
+			{
+				if (Property.Key == TEXT("code")) Code = Property.Value;
+			}
+			const bool bHybrid = Mode == EHyperAIStudioMaterialAuthoringMode::Hybrid;
+			++InOutCustomNodes;
+			InOutCustomBytes += Code.Len();
+			if (bHybrid && Spec.Justification.TrimStartAndEnd().IsEmpty())
+				return Fail(TEXT("custom_hlsl_justification_required"), TEXT("Hybrid mode: give each custom_hlsl node a justification naming what graph nodes cannot express."));
+			if (InOutCustomNodes > (bHybrid ? MaxHybridCustomNodes : MaxHlslCustomNodes)
+				|| (bHybrid ? Code.Len() > MaxHybridCustomCodeBytes : InOutCustomBytes > MaxHlslCustomCodeBytes))
+				return Fail(TEXT("custom_hlsl_budget_exceeded"), bHybrid
+					? FString::Printf(TEXT("Hybrid mode allows %d custom_hlsl nodes per plan of up to %d bytes each."), MaxHybridCustomNodes, MaxHybridCustomCodeBytes)
+					: FString::Printf(TEXT("HLSL mode allows %d custom_hlsl nodes and %d bytes of code per plan."), MaxHlslCustomNodes, MaxHlslCustomCodeBytes));
+		}
+		FString Error;
+		UMaterialExpression* Shadow = Gate::MakeShadowNode(Spec, Error);
+		if (!Shadow) return Fail(TEXT("invalid_node_property"), FString::Printf(TEXT("%s: %s"), *Spec.NodeId, *Error));
+		if (Gate::IsCustomKind(Spec.Kind))
+		{
+			TArray<FString> InputNames;
+			for (const FCustomInput& Input : CastChecked<UMaterialExpressionCustom>(Shadow)->Inputs) InputNames.Add(Input.InputName.ToString());
+			if (Mode == EHyperAIStudioMaterialAuthoringMode::Hybrid && Gate::IsExpressibleWithNodes(Code, InputNames))
+				return Fail(TEXT("custom_hlsl_expressible_with_nodes"), FString::Printf(TEXT("%s is a single expression the graph already has nodes for; use those nodes so artists can read and tweak it."), *Spec.NodeId));
+			OutCustomNodes.Add(FString::Printf(TEXT("%s: %s (%s)"), *Operation.TargetPath, *Spec.NodeId,
+				Spec.Justification.IsEmpty() ? TEXT("HLSL mode") : *Spec.Justification.Left(256)));
+		}
+		const FName ParameterName = ParameterNameOf(Shadow);
+		if (Gate::IsParameterKind(Spec.Kind))
+		{
+			bool bDuplicate = false;
+			ParameterNames.Add(ParameterName, &bDuplicate);
+			if (ParameterName.IsNone() || bDuplicate)
+				return Fail(TEXT("duplicate_parameter_name"), FString::Printf(TEXT("%s needs a name property unique in the material."), *Spec.NodeId));
+		}
+		if (Spec.Kind == TEXT("function_call"))
+		{
+			FString FunctionPath;
+			for (const FHyperAIMaterialNodeProperty& Property : Spec.Properties)
+			{
+				if (Property.Key == TEXT("function")) FunctionPath = Property.Value;
+			}
+			if (!Gate::GetFunctionPins(FunctionPath, FunctionInputs.Add(Spec.NodeId), FunctionOutputs.Add(Spec.NodeId), Error))
+				return Fail(TEXT("invalid_node_property"), FString::Printf(TEXT("%s needs a function property: %s"), *Spec.NodeId, *Error));
+		}
+		Nodes.Add(Spec.NodeId, Shadow);
+		Kinds.Add(Spec.NodeId, Spec.Kind);
+	}
+	for (const FHyperAIMaterialPropertyEdit& Edit : Operation.PropertyEdits)
+	{
+		UMaterialExpression* const* Found = Nodes.Find(Edit.NodeId);
+		const FString Kind = Kinds.FindRef(Edit.NodeId);
+		if (!Found || Kind.IsEmpty())
+			return Fail(TEXT("node_not_editable"), FString::Printf(TEXT("%s is not a node this plan can set properties on (opaque nodes can only be wired or removed)."), *Edit.NodeId.Left(64)));
+		if (Gate::IsCustomKind(Kind) && Mode == EHyperAIStudioMaterialAuthoringMode::Nodes)
+			return Fail(TEXT("authoring_mode_forbids_custom_hlsl"), TEXT("Materials are set to Nodes only, so Custom HLSL nodes cannot be edited."));
+		// Checked on a throwaway node of the same class, so a bad value never touches the material.
+		UMaterialExpression* Probe = NewObject<UMaterialExpression>(GetTransientPackage(), (*Found)->GetClass(), NAME_None, RF_Transient);
+		FString Error;
+		if (!Gate::WriteProperty(*Probe, Kind, Edit.Key, Edit.Value, /*bNotify=*/false, Error))
+			return Fail(TEXT("invalid_node_property"), FString::Printf(TEXT("%s: %s"), *Edit.NodeId, *Error));
+	}
+	TSet<FString> AssignedInputs;
+	for (const FHyperAIMaterialEdgeSpec& Edge : Operation.Edges)
+	{
+		UMaterialExpression* const* From = Nodes.Find(Edge.FromNodeId);
+		UMaterialExpression* const* To = Nodes.Find(Edge.ToNodeId);
+		if (!From || !To)
+			return Fail(TEXT("edge_endpoint_missing"), FString::Printf(TEXT("Edge %s -> %s names a node that does not exist."), *Edge.FromNodeId.Left(64), *Edge.ToNodeId.Left(64)));
+		const TArray<FString>* CallOutputs = FunctionOutputs.Find(Edge.FromNodeId);
+		const TArray<FString>* CallInputs = FunctionInputs.Find(Edge.ToNodeId);
+		const bool bOutputOk = CallOutputs ? (Edge.FromOutput.IsEmpty() ? !CallOutputs->IsEmpty() : CallOutputs->Contains(Edge.FromOutput))
+			: Gate::HasOutput(**From, Edge.FromOutput);
+		const bool bInputOk = CallInputs ? (Edge.ToInput.IsEmpty() ? !CallInputs->IsEmpty() : CallInputs->Contains(Edge.ToInput))
+			: Gate::HasInput(**To, Edge.ToInput);
+		if (!bOutputOk || !bInputOk)
+			return Fail(TEXT("closed_pin_not_found"), FString::Printf(TEXT("%s has no output '%s', or %s has no input '%s'. Inspect a node to see its pins."),
+				*Edge.FromNodeId.Left(64), *Edge.FromOutput.Left(64), *Edge.ToNodeId.Left(64), *Edge.ToInput.Left(64)));
+		if (!AddUnique(AssignedInputs, Edge.ToNodeId + TEXT("\n") + Edge.ToInput))
+			return Fail(TEXT("contradictory_input_assignments"), TEXT("One input cannot receive more than one source in the same plan."));
+	}
+	TSet<FString> AssignedOutputs;
+	for (const FHyperAIMaterialOutputSpec& Output : Operation.Outputs)
+	{
+		UMaterialExpression* const* From = Nodes.Find(Output.FromNodeId);
+		const TArray<FString>* CallOutputs = FunctionOutputs.Find(Output.FromNodeId);
+		if (Gate::OutputPropertyFromName(Output.Property) == MP_MAX || !AddUnique(AssignedOutputs, Output.Property))
+			return Fail(TEXT("invalid_output_shape"), FString::Printf(TEXT("'%s' is not a material output, or is set twice."), *Output.Property.Left(64)));
+		if (!From || !(CallOutputs ? (Output.FromOutput.IsEmpty() || CallOutputs->Contains(Output.FromOutput)) : Gate::HasOutput(**From, Output.FromOutput)))
+			return Fail(TEXT("closed_output_pin_not_found"), FString::Printf(TEXT("%s has no output '%s'."), *Output.FromNodeId.Left(64), *Output.FromOutput.Left(64)));
+	}
+	for (const FHyperAIMaterialNodeProperty& Setting : Operation.MaterialSettings)
+	{
+		FString Error;
+		if (!Gate::ValidateMaterialSetting(Setting.Key, Setting.Value, Error))
+			return Fail(TEXT("invalid_material_setting"), Error);
 	}
 	return true;
 }
@@ -3130,6 +3533,335 @@ bool FHyperAIStudioMaterialsContracts::VerifyRepairPostconditions(
 	return true;
 }
 
+namespace HyperAIStudio::Materials::Private
+{
+	namespace Gate = HyperAIStudio::Materials::Gate;
+	using EKind = EHyperAIStudioMaterialOperationKind;
+
+	bool IsCreateKind(const EKind Kind)
+	{
+		return Kind == EKind::CompoundCreateConfigureGraph || Kind == EKind::CreateMaterial
+			|| Kind == EKind::CreateMaterialInstance;
+	}
+
+	/**
+	 * One revision over every target: the inspect revision of an edited material, the content key of an edited
+	 * instance, "absent" for a create. Planning seals it and Apply recomputes it, so a target that changed in
+	 * between, by an agent or a person, is refused before a single edit lands.
+	 */
+	bool ComputeBaseRevision(
+		const TArray<FHyperAIStudioMaterialBackendOperation>& Operations,
+		const int32 MaxWorkMs,
+		FString& OutBase,
+		FString& OutError)
+	{
+		TArray<const FHyperAIStudioMaterialBackendOperation*> Sorted;
+		for (const FHyperAIStudioMaterialBackendOperation& Operation : Operations) Sorted.Add(&Operation);
+		Sorted.Sort([](const FHyperAIStudioMaterialBackendOperation& A, const FHyperAIStudioMaterialBackendOperation& B)
+		{
+			return A.TargetPath < B.TargetPath;
+		});
+		FString Canonical;
+		AppendToken(Canonical, TEXT("hyperai.material.base.v2"));
+		for (const FHyperAIStudioMaterialBackendOperation* Operation : Sorted)
+		{
+			AppendToken(Canonical, Operation->TargetPath);
+			if (IsCreateKind(Operation->Kind))
+			{
+				const bool bAbsent = !FSoftObjectPath(Operation->TargetPath).ResolveObject()
+					&& !FPackageName::DoesPackageExist(FPackageName::ObjectPathToPackageName(Operation->TargetPath));
+				AppendToken(Canonical, bAbsent ? TEXT("absent") : TEXT("present"));
+			}
+			else if (Operation->Kind == EKind::SetInstanceParameters)
+			{
+				const UObject* Instance = FSoftObjectPath(Operation->TargetPath).ResolveObject();
+				if (!Instance)
+				{
+					OutError = TEXT("The material instance is not loaded.");
+					return false;
+				}
+				AppendToken(Canonical, Gate::ComputeContentKey(*Instance));
+			}
+			else
+			{
+				FHyperAIStudioMaterialValueSnapshot Snapshot;
+				FString Status;
+				if (!FHyperAIStudioMaterialsContracts::CaptureExact(Operation->TargetPath, Operation->TargetFamily,
+					TEXT("loaded_only"), FHyperAIStudioMaterialsContracts::MaxNodes, FHyperAIStudioMaterialsContracts::MaxEdges,
+					MaxWorkMs, Snapshot, Status, OutError) || !Snapshot.bComplete)
+				{
+					if (OutError.IsEmpty()) OutError = TEXT("The material no longer captures completely.");
+					return false;
+				}
+				AppendToken(Canonical, Snapshot.Revision);
+			}
+		}
+		OutBase = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(Canonical);
+		return FHyperAIStudioMaterialsContracts::IsCanonicalSha256(OutBase);
+	}
+
+	/** The reviewable identity of a plan: its ordered operations, the base they apply to, and the authoring mode. */
+	FString SealFingerprint(const FHyperAIStudioMaterialTypedPayload& Payload)
+	{
+		FString Canonical;
+		AppendToken(Canonical, TEXT("hyperai.material.sealed-plan.v2"));
+		AppendToken(Canonical, FHyperAIStudioMaterialsContracts::ComputePayloadSemanticFingerprint(
+			Payload.Operations, Payload.BaseRevision));
+		AppendToken(Canonical, Payload.AuthoringMode);
+		return FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(Canonical);
+	}
+
+	FString EffectTargetOf(const FHyperAIStudioMaterialTypedPayload& Payload)
+	{
+		return Payload.Operations.Num() == 1
+			? Payload.Operations[0].TargetPath
+			: FString(TEXT("material-plan:")) + Payload.BaseRevision;
+	}
+
+	FString DescribeOperation(const FHyperAIStudioMaterialBackendOperation& Operation)
+	{
+		switch (Operation.Kind)
+		{
+		case EKind::CreateMaterial:
+		case EKind::CompoundCreateConfigureGraph:
+			return FString::Printf(TEXT("create material %s: %d nodes, %d connections, %d outputs"),
+				*Operation.TargetPath, Operation.Nodes.Num(), Operation.Edges.Num(), Operation.Outputs.Num());
+		case EKind::EditGraph:
+			return FString::Printf(TEXT("edit %s: +%d nodes, -%d nodes, %d connections, %d property edits"),
+				*Operation.TargetPath, Operation.Nodes.Num(), Operation.RemoveNodeIds.Num(),
+				Operation.Edges.Num() + Operation.Outputs.Num(), Operation.PropertyEdits.Num());
+		case EKind::CreateMaterialInstance:
+			return FString::Printf(TEXT("create instance %s of %s with %d parameters"),
+				*Operation.TargetPath, *Operation.ParentPath, Operation.Parameters.Num());
+		case EKind::SetInstanceParameters:
+			return FString::Printf(TEXT("set %d parameters on %s"), Operation.Parameters.Num(), *Operation.TargetPath);
+		default:
+			return FString::Printf(TEXT("repair %s"), *Operation.TargetPath);
+		}
+	}
+
+	/**
+	 * One executor phase; the order is fixed: Apply, Compile, Validate, Save, VerifyFresh. After Apply every failure is
+	 * FailedAfterKnownEffect: the edit stays in memory, unsaved and undoable, rather than being silently rolled back.
+	 */
+	FHyperAIStudioDomainAdapterResult ExecuteEditPhase(
+		const EHyperAIStudioDomainExecutionActionKind Phase,
+		const FHyperAIStudioMaterialTypedPayload& Payload)
+	{
+		FHyperAIStudioDomainAdapterResult Result;
+		const double Started = FPlatformTime::Seconds();
+		auto Finish = [&](const EHyperAIStudioDomainDispatchOutcome Outcome, const FString& Status,
+			const FString& Diagnostic, const TCHAR* ResultPhase = nullptr, const FString& ContentKey = FString())
+		{
+			UE_LOG(LogHyperAIStudioMaterials, Log, TEXT("Material edit phase %d finished %s in %.1f ms. %s"),
+				static_cast<int32>(Phase), *Status, (FPlatformTime::Seconds() - Started) * 1000.0, *Diagnostic);
+			Result.Outcome = Outcome;
+			Result.StatusCode = Status.Left(FHyperAIStudioDomainLimits::MaxStatusCodeChars);
+			Result.Diagnostic = Diagnostic.Left(FHyperAIStudioDomainLimits::MaxDiagnosticChars);
+			if (Outcome == EHyperAIStudioDomainDispatchOutcome::Succeeded)
+			{
+				const TSharedRef<FHyperAIStudioMaterialResultPayload, ESPMode::ThreadSafe> Output =
+					MakeShared<FHyperAIStudioMaterialResultPayload, ESPMode::ThreadSafe>();
+				Output->Phase = ResultPhase;
+				Output->Revision = ContentKey;
+				Output->bValid = true;
+				Result.Payload = Output;
+			}
+			return Result;
+		};
+		const bool bApply = Phase == EHyperAIStudioDomainExecutionActionKind::Apply;
+		const EHyperAIStudioDomainDispatchOutcome FailedOutcome = bApply
+			? EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect
+			: EHyperAIStudioDomainDispatchOutcome::FailedAfterKnownEffect;
+		if (!IsInGameThread())
+		{
+			return Finish(FailedOutcome, TEXT("game_thread_required"), TEXT("Material edits run on the game thread."));
+		}
+
+		switch (Phase)
+		{
+		case EHyperAIStudioDomainExecutionActionKind::Apply:
+		{
+			if (Payload.AuthoringMode != FHyperAIStudioMaterialsContracts::GetAuthoringModeName())
+			{
+				return Finish(EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect, TEXT("authoring_mode_changed"),
+					TEXT("The Materials authoring mode changed after this plan was reviewed; nothing was applied. Dry-run again."));
+			}
+			FString Base;
+			FString Error;
+			if (!ComputeBaseRevision(Payload.Operations, 150, Base, Error) || Base != Payload.BaseRevision)
+			{
+				return Finish(EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect, TEXT("stale_revision"),
+					TEXT("A target changed after planning; nothing was applied. Inspect and dry-run again. ") + Error);
+			}
+			for (const FHyperAIStudioMaterialBackendOperation& Operation : Payload.Operations)
+			{
+				const UObject* Target = FSoftObjectPath(Operation.TargetPath).ResolveObject();
+				if (Target && Gate::IsOpenInEditor(*Target))
+				{
+					return Finish(EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect, TEXT("target_open_in_editor"),
+						FString::Printf(TEXT("%s was opened in an editor after planning; nothing was applied. Close its tab and retry."), *Operation.TargetPath));
+				}
+			}
+			const FScopedTransaction Transaction(NSLOCTEXT("HyperAIStudioMaterials", "ApplyPlan", "HyperAI Material Edit"));
+			int32 Changed = 0;
+			for (const FHyperAIStudioMaterialBackendOperation& Operation : Payload.Operations)
+			{
+				if (!Gate::ApplyOperation(Operation, Changed, Error))
+				{
+					return Finish(Changed > 0
+						? EHyperAIStudioDomainDispatchOutcome::FailedAfterKnownEffect
+						: EHyperAIStudioDomainDispatchOutcome::FailedBeforeEffect,
+						TEXT("edit_op_failed"), Error + TEXT(" Nothing was saved; undo reverts what landed."));
+				}
+			}
+			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("applied"),
+				FString::Printf(TEXT("%d edits applied."), Changed), TEXT("applied"));
+		}
+		case EHyperAIStudioDomainExecutionActionKind::Compile:
+		{
+			TArray<FString> Targets;
+			for (const FHyperAIStudioMaterialBackendOperation& Operation : Payload.Operations)
+			{
+				Targets.Add(Operation.TargetPath);
+			}
+			// Translating a graph can take over a second on the game thread, more than a phase may spend, so the
+			// recompile runs on the next tick outside the executor's budget, as it would after an edit in the material
+			// editor. A job then waits for the shaders; translation errors fail that job and show in validate.
+			FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Targets](float)
+			{
+				TArray<FString> TranslationErrors;
+				for (const FString& Path : Targets)
+				{
+					if (UMaterial* Material = Cast<UMaterial>(FSoftObjectPath(Path).ResolveObject()))
+					{
+						for (const FString& Error : UMaterialEditingLibrary::RecompileMaterial(Material))
+						{
+							TranslationErrors.Add(Material->GetName() + TEXT(": ") + Error.Left(256));
+						}
+					}
+				}
+				FHyperAIStudioAsyncJobRequest Job;
+				Job.PackId = FHyperAIStudioMaterialsContracts::PackId;
+				Job.ToolName = FHyperAIStudioMaterialsContracts::MutationToolName;
+				Job.Target = Targets.Num() == 1 ? Targets[0] : FString::Printf(TEXT("%d materials"), Targets.Num());
+				Job.DeadlineMs = 10 * 60 * 1000;
+				Job.PollIntervalMs = 250;
+				FString JobId;
+				FString JobError;
+				FHyperAIStudioAsyncJobHost::Start(Job, [Targets, TranslationErrors](FString& OutProgress, FString& OutDiagnostic)
+				{
+					TArray<FString> Failures = TranslationErrors;
+					for (const FString& Path : Targets)
+					{
+						UMaterialInterface* Material = Cast<UMaterialInterface>(FSoftObjectPath(Path).ResolveObject());
+						if (!Material) continue;
+						if (!Gate::IsCompileFinished(*Material))
+						{
+							OutProgress = TEXT("compiling shaders");
+							return EHyperAIStudioAsyncJobPoll::Running;
+						}
+						UMaterial* Base = Material->GetMaterial();
+						const FMaterialResource* Resource = Base && TranslationErrors.IsEmpty()
+							? Base->GetMaterialResource(GMaxRHIShaderPlatform) : nullptr;
+						if (Resource)
+						{
+							for (const FString& Error : Resource->GetCompileErrors())
+							{
+								Failures.Add(Material->GetName() + TEXT(": ") + Error.Left(256));
+							}
+						}
+					}
+					OutDiagnostic = Failures.IsEmpty()
+						? FString(TEXT("Shaders compiled. hyper_material_validate reports instruction counts and writes the preview PNG."))
+						: FString::Join(Failures, TEXT(" | ")).Left(1024);
+					return Failures.IsEmpty() ? EHyperAIStudioAsyncJobPoll::Completed : EHyperAIStudioAsyncJobPoll::Failed;
+				}, JobId, JobError);
+				return false;
+			}));
+			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("compile_scheduled"),
+				TEXT("The graph recompiles on the next tick and a job watches the shaders. hyper_material_validate reports errors, instruction counts and the preview once they finish."),
+				TEXT("compile_requested"));
+		}
+		case EHyperAIStudioDomainExecutionActionKind::Validate:
+		{
+			for (const FHyperAIStudioMaterialBackendOperation& Operation : Payload.Operations)
+			{
+				UObject* Target = FSoftObjectPath(Operation.TargetPath).ResolveObject();
+				if (!Target)
+				{
+					return Finish(EHyperAIStudioDomainDispatchOutcome::FailedAfterKnownEffect, TEXT("target_not_loaded"),
+						FString::Printf(TEXT("%s is no longer loaded."), *Operation.TargetPath));
+				}
+				if (Target->IsA<UMaterial>())
+				{
+					// Structure only: shaders are still compiling, and the validator counts that as an error.
+					FHyperAIStudioMaterialValueSnapshot Snapshot;
+					FString Status;
+					FString Diagnostic;
+					if (!FHyperAIStudioMaterialsContracts::CaptureExact(Operation.TargetPath, TEXT("material"), TEXT("loaded_only"),
+						FHyperAIStudioMaterialsContracts::MaxNodes, FHyperAIStudioMaterialsContracts::MaxEdges, 150,
+						Snapshot, Status, Diagnostic))
+					{
+						return Finish(EHyperAIStudioDomainDispatchOutcome::FailedAfterKnownEffect, Status,
+							TEXT("The edited material no longer captures and was not saved; undo reverts it. ") + Diagnostic);
+					}
+				}
+			}
+			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("validated"),
+				TEXT("Every target captures. hyper_material_validate reports compile results once shaders finish."), TEXT("validated"));
+		}
+		case EHyperAIStudioDomainExecutionActionKind::Save:
+		{
+			TArray<UPackage*> Packages;
+			for (const FHyperAIStudioMaterialBackendOperation& Operation : Payload.Operations)
+			{
+				if (UObject* Target = FSoftObjectPath(Operation.TargetPath).ResolveObject())
+				{
+					Packages.AddUnique(Target->GetOutermost());
+				}
+			}
+			if (Packages.Num() != Payload.Operations.Num() || !UEditorLoadingAndSavingUtils::SavePackages(Packages, /*bOnlyDirty=*/false))
+			{
+				return Finish(EHyperAIStudioDomainDispatchOutcome::FailedAfterKnownEffect, TEXT("save_failed"),
+					TEXT("The edit applied but not every package saved; it remains in memory and can be undone."));
+			}
+			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("saved"), TEXT("Packages saved."), TEXT("saved"));
+		}
+		case EHyperAIStudioDomainExecutionActionKind::VerifyFresh:
+			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("fresh_captured"),
+				TEXT("Fresh content captured for verification."), TEXT("completed"),
+				FHyperAIStudioMaterialsContracts::ComputePlanContentKey(Payload));
+		default:
+			return Finish(FailedOutcome, TEXT("unsupported_phase"), TEXT("Unknown execution phase."));
+		}
+	}
+}
+
+bool FHyperAIStudioMaterialsContracts::ComputePlanBaseRevision(
+	const TArray<FHyperAIStudioMaterialBackendOperation>& Operations, const int32 MaxWorkMs, FString& OutBase, FString& OutError)
+{
+	return HyperAIStudio::Materials::Private::ComputeBaseRevision(Operations, MaxWorkMs, OutBase, OutError);
+}
+
+FString FHyperAIStudioMaterialsContracts::ComputeSealedPlanFingerprint(const FHyperAIStudioMaterialTypedPayload& Payload)
+{
+	return HyperAIStudio::Materials::Private::SealFingerprint(Payload);
+}
+
+FString FHyperAIStudioMaterialsContracts::ComputePlanContentKey(const FHyperAIStudioMaterialTypedPayload& Payload)
+{
+	using namespace HyperAIStudio::Materials::Private;
+	FString Canonical;
+	AppendToken(Canonical, TEXT("hyperai.material.plan-content.v1"));
+	for (const FHyperAIStudioMaterialBackendOperation& Operation : Payload.Operations)
+	{
+		const UObject* Target = FSoftObjectPath(Operation.TargetPath).ResolveObject();
+		AppendToken(Canonical, Target ? Gate::ComputeContentKey(*Target) : FString(TEXT("missing:")) + Operation.TargetPath);
+	}
+	return FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(Canonical);
+}
+
 FHyperAIMaterialApplyPlanReport FHyperAIStudioMaterialsContracts::BuildPlan(
 	const FHyperAIMaterialApplyPlanRequest& Request)
 {
@@ -3138,11 +3870,17 @@ FHyperAIMaterialApplyPlanReport FHyperAIStudioMaterialsContracts::BuildPlan(
 	Report.bDryRun = Request.bDryRun;
 	Report.OperationId = Clip(Request.OperationId, 256);
 	Report.Capabilities = GetCapabilityMatrix();
+	Report.AuthoringMode = GetAuthoringModeName();
+	auto Reject = [&Report](const TCHAR* Status, const FString& Diagnostic)
+	{
+		Report.bOk = false;
+		Report.Status = Status;
+		Report.Diagnostic = Diagnostic.Left(1024);
+		return Report;
+	};
 	if (!IsInGameThread())
 	{
-		Report.Status = TEXT("game_thread_required");
-		Report.Diagnostic = TEXT("Material plan preparation captures exact loaded CAS state on the game thread.");
-		return Report;
+		return Reject(TEXT("game_thread_required"), TEXT("Material plans capture loaded state on the game thread."));
 	}
 	if (Request.OperationId.Len() > 256
 		|| Request.ExpectedPlanHash.Len() > 71
@@ -3152,192 +3890,288 @@ FHyperAIMaterialApplyPlanReport FHyperAIStudioMaterialsContracts::BuildPlan(
 		|| Request.MaxGameThreadMs < 50 || Request.MaxGameThreadMs > 2000
 		|| Request.MaxOutputBytes < MinOutputBytes || Request.MaxOutputBytes > MaxOutputBytes)
 	{
-		Report.Status = TEXT("invalid_request_bounds");
-		Report.Diagnostic = TEXT("Operation identity/count, expected hash, deadline, game-thread budget, or output bound is invalid.");
-		return Report;
+		return Reject(TEXT("invalid_request_bounds"),
+			TEXT("Operation identity/count, expected hash, deadline, game-thread budget, or output bound is invalid."));
 	}
+	if (!Request.bDryRun && (Request.OperationId.IsEmpty() || Request.ExpectedPlanHash.IsEmpty()))
+	{
+		return Reject(TEXT("operation_identity_required"),
+			TEXT("Applying needs operation_id and expected_plan_hash (the plan_hash of the dry run you reviewed)."));
+	}
+	const EHyperAIStudioMaterialAuthoringMode Mode = GetDefault<UHyperAIStudioSettings>()->MaterialAuthoringMode;
 	const double Deadline = FPlatformTime::Seconds()
 		+ static_cast<double>(FMath::Min(Request.DeadlineMs, Request.MaxGameThreadMs)) / 1000.0;
 	const int32 IssueLimit = FMath::Clamp(Request.MaxOutputBytes / 16384, 1, MaxIssues);
 	TArray<FHyperAIStudioMaterialBackendOperation> Operations;
-	TMap<FString, FHyperAIStudioMaterialValueSnapshot> ExistingSnapshots;
 	TMap<FString, FString> ExpectedPostProjectionByTarget;
+	TMap<FString, const FHyperAIStudioMaterialBackendOperation*> PlannedCreates;
 	TSet<FString> Targets;
 	int64 PlanMaterializedBytes = 1024;
+	int32 CustomNodes = 0;
+	int32 CustomBytes = 0;
+	int32 ParameterCount = 0;
 	bool bIssueTruncated = false;
+	bool bHasRepair = false;
 	for (int32 Index = 0; Index < Request.Operations.Num(); ++Index)
 	{
-		if (!IsBeforeDeadline(Deadline))
-		{
-			Report.Status = TEXT("planning_budget_exceeded");
-			Report.Diagnostic = TEXT("Bounded Material planning exhausted its total game-thread deadline during shape validation.");
-			return Report;
-		}
 		FHyperAIStudioMaterialBackendOperation Operation;
 		FString ErrorCode, Error;
-		if (!ValidateOperationShape(
-			Request.Operations[Index], Operation, ErrorCode, Error, Deadline))
+		if (!ValidateOperationShape(Request.Operations[Index], Operation, ErrorCode, Error, Deadline))
 		{
 			AddIssue(Report.Issues, IssueLimit, bIssueTruncated, *ErrorCode, TEXT("error"),
 				Request.Operations[Index].TargetPath, FString(), Index, Error);
 			continue;
 		}
 		const FString OperationCanonical = CanonicalBackendOperation(Operation);
-		const int64 OperationBytes = 256ll
-			+ static_cast<int64>(OperationCanonical.Len()) * MaxUtf8BytesPerCharacter;
+		const int64 OperationBytes = 256ll + static_cast<int64>(OperationCanonical.Len()) * MaxUtf8BytesPerCharacter;
 		if (OperationBytes > FHyperAIStudioDomainLimits::MaxRequestBytes
 			|| PlanMaterializedBytes > FHyperAIStudioDomainLimits::MaxRequestBytes - OperationBytes)
 		{
-			AddIssue(Report.Issues, IssueLimit, bIssueTruncated,
-				TEXT("typed_payload_exceeds_shared_bound"), TEXT("error"),
-				Operation.TargetPath, FString(), Index,
-				TEXT("Aggregate normalized operation bytes exceed the shared request bound."));
+			AddIssue(Report.Issues, IssueLimit, bIssueTruncated, TEXT("typed_payload_exceeds_shared_bound"), TEXT("error"),
+				Operation.TargetPath, FString(), Index, TEXT("The plan is too large; split it into smaller plans."));
 			continue;
 		}
 		PlanMaterializedBytes += OperationBytes;
 		if (!AddUnique(Targets, Operation.TargetPath))
 		{
 			AddIssue(Report.Issues, IssueLimit, bIssueTruncated, TEXT("duplicate_plan_target"), TEXT("error"),
-				Operation.TargetPath, FString(), Index, TEXT("Each atomic plan may bind one operation per exact target."));
+				Operation.TargetPath, FString(), Index, TEXT("Each plan may bind one operation per exact target."));
 			continue;
 		}
-		if (Operation.Kind == EHyperAIStudioMaterialOperationKind::CompoundCreateConfigureGraph)
+		auto AddError = [&](const TCHAR* Code, const FString& Message)
+		{
+			AddIssue(Report.Issues, IssueLimit, bIssueTruncated, Code, TEXT("error"), Operation.TargetPath, FString(), Index, Message);
+		};
+		auto RequireAbsent = [&]()
 		{
 			FString AbsenceError;
 			if (!CheckCreateTargetAbsence(Operation.TargetPath, AbsenceError))
-				AddIssue(Report.Issues, IssueLimit, bIssueTruncated, *AbsenceError, TEXT("error"),
-					Operation.TargetPath, FString(), Index,
-					TEXT("Compound create requires no loaded object and exact Asset Registry DoesNotExist; Unknown fails closed."));
-				ValidateCompoundGraph(
-					Operation, Report.Issues, Index, IssueLimit, bIssueTruncated, Deadline);
-				TArray<FHyperAIMaterialNodeView> ExpectedNodes;
-				TArray<FHyperAIMaterialEdgeView> ExpectedEdges;
-				TArray<FHyperAIMaterialPropertyInputView> ExpectedProperties;
-				FString ExpectedError;
-				if (!BuildExpectedCompoundSemanticGraph(
-					Operation, ExpectedNodes, ExpectedEdges, ExpectedError, Deadline)
-					|| !BuildExpectedCompoundPropertyState(
-						Operation, ExpectedProperties, ExpectedError, Deadline))
-				{
-					AddIssue(Report.Issues, IssueLimit, bIssueTruncated,
-						TEXT("expected_post_projection_unavailable"), TEXT("error"),
-						Operation.TargetPath, FString(), Index, ExpectedError);
-				}
-				else
-				{
-					FString ExpectedCanonical;
-					AppendToken(ExpectedCanonical, TEXT("hyperai.material.expected-compound-projection.v1"));
-					for (const FHyperAIMaterialNodeView& Node : ExpectedNodes)
-					{
-						if (!IsBeforeDeadline(Deadline)) break;
-						AppendToken(ExpectedCanonical, CanonicalNode(Node));
-					}
-					for (const FHyperAIMaterialEdgeView& Edge : ExpectedEdges)
-					{
-						if (!IsBeforeDeadline(Deadline)) break;
-						AppendToken(ExpectedCanonical, CanonicalEdge(Edge));
-					}
-					for (const FHyperAIMaterialPropertyInputView& Property : ExpectedProperties)
-					{
-						if (!IsBeforeDeadline(Deadline)) break;
-						AppendToken(ExpectedCanonical, CanonicalPropertyInput(Property));
-					}
-					if (!IsBeforeDeadline(Deadline))
-					{
-						Report.Status = TEXT("planning_budget_exceeded");
-						Report.Diagnostic = TEXT("Expected projection sealing exhausted its caller-owned deadline.");
-						return Report;
-					}
-					const FString ExpectedProjection =
-						FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(ExpectedCanonical);
-					if (!IsCanonicalSha256(ExpectedProjection) || !IsBeforeDeadline(Deadline))
-						AddIssue(Report.Issues, IssueLimit, bIssueTruncated,
-							TEXT("expected_post_projection_unavailable"), TEXT("error"),
-							Operation.TargetPath, FString(), Index,
-							TEXT("Expected projection exceeded its canonical byte or deadline bound."));
-					else ExpectedPostProjectionByTarget.Add(
-						Operation.TargetPath, ExpectedProjection);
-				}
-		}
-		else
+				AddError(*AbsenceError, TEXT("Create needs a target path with no asset loaded or on disk; Unknown fails closed."));
+		};
+		switch (Operation.Kind)
 		{
+		case EKind::CompoundCreateConfigureGraph:
+		{
+			RequireAbsent();
+			ValidateCompoundGraph(Operation, Report.Issues, Index, IssueLimit, bIssueTruncated, Deadline);
+			TArray<FHyperAIMaterialNodeView> ExpectedNodes;
+			TArray<FHyperAIMaterialEdgeView> ExpectedEdges;
+			TArray<FHyperAIMaterialPropertyInputView> ExpectedProperties;
+			FString ExpectedError;
+			if (!BuildExpectedCompoundSemanticGraph(Operation, ExpectedNodes, ExpectedEdges, ExpectedError, Deadline)
+				|| !BuildExpectedCompoundPropertyState(Operation, ExpectedProperties, ExpectedError, Deadline))
+			{
+				AddError(TEXT("expected_post_projection_unavailable"), ExpectedError);
+				break;
+			}
+			FString ExpectedCanonical;
+			AppendToken(ExpectedCanonical, TEXT("hyperai.material.expected-compound-projection.v1"));
+			for (const FHyperAIMaterialNodeView& Node : ExpectedNodes) AppendToken(ExpectedCanonical, CanonicalNode(Node));
+			for (const FHyperAIMaterialEdgeView& Edge : ExpectedEdges) AppendToken(ExpectedCanonical, CanonicalEdge(Edge));
+			for (const FHyperAIMaterialPropertyInputView& Property : ExpectedProperties)
+				AppendToken(ExpectedCanonical, CanonicalPropertyInput(Property));
+			const FString ExpectedProjection = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(ExpectedCanonical);
+			if (IsCanonicalSha256(ExpectedProjection)) ExpectedPostProjectionByTarget.Add(Operation.TargetPath, ExpectedProjection);
+			else AddError(TEXT("expected_post_projection_unavailable"), TEXT("Expected projection exceeded its canonical byte bound."));
+			PlannedCreates.Add(Operation.TargetPath, nullptr);
+			break;
+		}
+		case EKind::RepairSemanticGraph:
+		{
+			bHasRepair = true;
 			FHyperAIStudioMaterialValueSnapshot Snapshot;
 			FString Status, Diagnostic;
-			const double RemainingSeconds = Deadline - FPlatformTime::Seconds();
-			if (RemainingSeconds <= 0.0)
-			{
-				Report.Status = TEXT("planning_budget_exceeded");
-				Report.Diagnostic = TEXT("Bounded Material planning exhausted its total game-thread deadline before capture.");
-				return Report;
-			}
 			const int32 CaptureBudgetMs = FMath::Clamp(
-				FMath::CeilToInt(RemainingSeconds * 1000.0), 1, Request.MaxGameThreadMs);
+				FMath::CeilToInt((Deadline - FPlatformTime::Seconds()) * 1000.0), 1, Request.MaxGameThreadMs);
 			if (!CaptureExact(Operation.TargetPath, Operation.TargetFamily, TEXT("loaded_only"),
 				MaxNodes, MaxEdges, CaptureBudgetMs, Snapshot, Status, Diagnostic))
-				AddIssue(Report.Issues, IssueLimit, bIssueTruncated, *Status, TEXT("error"),
-					Operation.TargetPath, FString(), Index, Diagnostic);
-				else if (Snapshot.Record.DiskExistence != TEXT("exists")
-					|| !Snapshot.Record.bExistsOnDisk)
-					AddIssue(Report.Issues, IssueLimit, bIssueTruncated,
-						TEXT("mutation_target_not_persisted"), TEXT("error"),
-						Operation.TargetPath, FString(), Index,
-						TEXT("Semantic repair requires exact Asset Registry Exists; DoesNotExist and Unknown fail closed."));
-				else if (!Snapshot.bComplete || Snapshot.Revision != Operation.ExpectedRevision)
-				AddIssue(Report.Issues, IssueLimit, bIssueTruncated, TEXT("revision_precondition_failed"), TEXT("error"),
-					Operation.TargetPath, FString(), Index, TEXT("Fresh loaded CAS is incomplete or differs from expected_revision."));
+				AddError(*Status, Diagnostic);
+			else if (Snapshot.Record.DiskExistence != TEXT("exists") || !Snapshot.Record.bExistsOnDisk)
+				AddError(TEXT("mutation_target_not_persisted"), TEXT("Semantic repair requires exact Asset Registry Exists."));
+			else if (!Snapshot.bComplete || Snapshot.Revision != Operation.ExpectedRevision)
+				AddError(TEXT("revision_precondition_failed"), TEXT("Fresh loaded CAS is incomplete or differs from expected_revision."));
 			else if (Snapshot.Record.bCompiling || Snapshot.Record.bCompileError)
-				AddIssue(Report.Issues, IssueLimit, bIssueTruncated, TEXT("compile_state_not_editable"), TEXT("error"),
-					Operation.TargetPath, FString(), Index, TEXT("Semantic repair cannot begin while compile is active or failed."));
+				AddError(TEXT("compile_state_not_editable"), TEXT("Semantic repair cannot begin while compile is active or failed."));
 			else
 			{
 				FHyperAIStudioMaterialValueSnapshot Shadow;
 				FString ShadowError;
 				if (!ReplayRepairShadow(Snapshot, Operation, Shadow, Deadline, ShadowError))
-					AddIssue(Report.Issues, IssueLimit, bIssueTruncated, *ShadowError, TEXT("error"),
-						Operation.TargetPath, FString(), Index,
-						TEXT("Closed typed repair shadow did not produce a distinct independently valid graph."));
-					else
-					{
-						ExpectedPostProjectionByTarget.Add(Operation.TargetPath, Shadow.Revision);
-						ExistingSnapshots.Add(Operation.TargetPath, MoveTemp(Snapshot));
-					}
+					AddError(*ShadowError, TEXT("Closed typed repair shadow did not produce a distinct independently valid graph."));
+				else ExpectedPostProjectionByTarget.Add(Operation.TargetPath, Shadow.Revision);
 			}
+			break;
+		}
+		case EKind::CreateMaterial:
+		case EKind::EditGraph:
+		{
+			const UMaterial* Existing = nullptr;
+			if (Operation.Kind == EKind::CreateMaterial)
+			{
+				RequireAbsent();
+				PlannedCreates.Add(Operation.TargetPath, nullptr);
+			}
+			else
+			{
+				FHyperAIStudioMaterialValueSnapshot Snapshot;
+				FString Status, Diagnostic;
+				if (!CaptureExact(Operation.TargetPath, TEXT("material"), TEXT("loaded_only"), MaxNodes, MaxEdges,
+					Request.MaxGameThreadMs, Snapshot, Status, Diagnostic))
+				{
+					AddError(*Status, Diagnostic + TEXT(" Inspect the material first (it must be loaded)."));
+					break;
+				}
+				if (!Snapshot.bComplete)
+				{
+					AddError(TEXT("revision_incomplete"), TEXT("The material does not capture completely; save it (opaque nodes need a clean package) and inspect again."));
+					break;
+				}
+				if (Snapshot.Revision != Operation.ExpectedRevision)
+				{
+					AddError(TEXT("stale_revision"), TEXT("The material changed since you inspected it; inspect again for its current revision and node ids."));
+					break;
+				}
+				if (Snapshot.Record.bCompiling)
+				{
+					AddError(TEXT("compile_in_progress"), TEXT("The material is still compiling; retry once it finishes."));
+					break;
+				}
+				Existing = Cast<UMaterial>(FSoftObjectPath(Operation.TargetPath).ResolveObject());
+				if (Existing && Gate::IsOpenInEditor(*Existing))
+				{
+					AddError(TEXT("target_open_in_editor"), TEXT("Close the material's editor tab: edits to an open material are overwritten by its preview copy."));
+					break;
+				}
+			}
+			TArray<FString> CustomDescriptions;
+			if (!ValidateGraphOperation(Operation, Existing, Mode, CustomNodes, CustomBytes, CustomDescriptions, ErrorCode, Error))
+			{
+				AddError(*ErrorCode, Error);
+				break;
+			}
+			Report.CustomHlslNodes.Append(CustomDescriptions);
+			break;
+		}
+		case EKind::CreateMaterialInstance:
+		case EKind::SetInstanceParameters:
+		{
+			ParameterCount += Operation.Parameters.Num();
+			if (ParameterCount > MaxParametersPerPlan)
+			{
+				AddError(TEXT("operation_collection_bound_exceeded"), FString::Printf(TEXT("A plan may set at most %d parameters."), MaxParametersPerPlan));
+				break;
+			}
+			TMap<FName, FString> Declared;
+			if (Operation.Kind == EKind::CreateMaterialInstance)
+			{
+				RequireAbsent();
+				PlannedCreates.Add(Operation.TargetPath, nullptr);
+				// A parent created earlier in this plan declares its parameters through its parameter nodes.
+				if (const FHyperAIStudioMaterialBackendOperation* const* Planned = PlannedCreates.Find(Operation.ParentPath))
+				{
+					for (const FHyperAIStudioMaterialBackendOperation& Earlier : Operations)
+					{
+						if (Earlier.TargetPath != Operation.ParentPath) continue;
+						for (const FHyperAIMaterialNodeSpec& Node : Earlier.Nodes)
+						{
+							FString NodeError;
+							if (UMaterialExpression* Shadow = Gate::IsParameterKind(Node.Kind) ? Gate::MakeShadowNode(Node, NodeError) : nullptr)
+							{
+								const FName Name = Cast<UMaterialExpressionParameter>(Shadow) ? Cast<UMaterialExpressionParameter>(Shadow)->ParameterName
+									: Cast<UMaterialExpressionTextureSampleParameter>(Shadow)->ParameterName;
+								Declared.Add(Name, Node.Kind == TEXT("scalar_parameter") ? TEXT("scalar") : Node.Kind == TEXT("vector_parameter")
+									? TEXT("vector") : Node.Kind == TEXT("texture_parameter") ? TEXT("texture") : TEXT("static_switch"));
+							}
+							else if (Node.Kind == TEXT("scalar_parameter") || Node.Kind == TEXT("vector_parameter"))
+							{
+								Declared.Add(FName(*Node.Name), Node.Kind == TEXT("scalar_parameter") ? TEXT("scalar") : TEXT("vector"));
+							}
+						}
+					}
+				}
+				else
+				{
+					UObject* Parent = FSoftObjectPath(Operation.ParentPath).TryLoad();
+					UMaterialInterface* ParentMaterial = Cast<UMaterialInterface>(Parent);
+					if (!ParentMaterial)
+					{
+						AddError(TEXT("parent_not_found"), FString::Printf(TEXT("%s is not a material or material instance."), *Operation.ParentPath));
+						break;
+					}
+					Declared = Gate::GetParentParameters(*ParentMaterial);
+				}
+			}
+			else
+			{
+				UMaterialInstanceConstant* Instance = Cast<UMaterialInstanceConstant>(FSoftObjectPath(Operation.TargetPath).TryLoad());
+				if (!Instance)
+				{
+					AddError(TEXT("target_not_found"), TEXT("The target is not a material instance constant."));
+					break;
+				}
+				if (Gate::IsOpenInEditor(*Instance))
+				{
+					AddError(TEXT("target_open_in_editor"), TEXT("Close the instance's editor tab first."));
+					break;
+				}
+				if (UMaterialInterface* Parent = Instance->Parent)
+				{
+					Declared = Gate::GetParentParameters(*Parent);
+				}
+			}
+			for (const FHyperAIMaterialParameterValue& Parameter : Operation.Parameters)
+			{
+				const FString* Type = Declared.Find(FName(*Parameter.Name.TrimStartAndEnd()));
+				FString ValueError;
+				if (!Type || *Type != Parameter.Type)
+				{
+					TArray<FString> Known;
+					for (const TPair<FName, FString>& Pair : Declared) Known.Add(Pair.Key.ToString() + TEXT(":") + Pair.Value);
+					AddError(TEXT("parameter_not_on_parent"), FString::Printf(TEXT("The parent has no %s parameter '%s'. It has: %s."),
+						*Parameter.Type, *Parameter.Name, *FString::Join(Known, TEXT(", ")).Left(512)));
+				}
+				else if (!Gate::CheckParameterValue(Parameter, ValueError))
+				{
+					AddError(TEXT("invalid_parameter_value"), ValueError);
+				}
+			}
+			break;
+		}
 		}
 		Operations.Add(MoveTemp(Operation));
-		if (FPlatformTime::Seconds() >= Deadline)
+		if (FPlatformTime::Seconds() >= Deadline && Request.Operations.Num() > 1 && Index + 1 < Request.Operations.Num())
 		{
-			Report.Status = TEXT("planning_budget_exceeded");
-			Report.Diagnostic = TEXT("Bounded plan preparation exceeded its deadline before sealing.");
-			Report.bTruncated = bIssueTruncated;
-			return Report;
+			return Reject(TEXT("planning_budget_exceeded"), TEXT("Planning ran out of its game-thread budget; split the plan or raise max_game_thread_ms."));
 		}
 	}
 	Report.bTruncated = bIssueTruncated;
 	if (HasErrors(Report.Issues) || Operations.Num() != Request.Operations.Num())
 	{
 		Report.Status = TEXT("plan_state_invalid");
-		Report.Diagnostic = TEXT("Closed schema, exact type, absence/CAS, or semantic shadow preconditions failed.");
+		Report.Diagnostic = TEXT("One or more operations failed their checks; see issues.");
 		return Report;
 	}
-
-	FString BaseCanonical;
-	AppendToken(BaseCanonical, TEXT("hyperai.material.base.v1"));
-	TArray<FString> SortedTargets = Targets.Array(); SortedTargets.Sort();
-	for (const FString& Target : SortedTargets)
+	if (bHasRepair && !Request.bDryRun)
 	{
-		if (!IsBeforeDeadline(Deadline))
-		{
-			Report.Status = TEXT("planning_budget_exceeded");
-			Report.Diagnostic = TEXT("Base revision sealing exhausted its caller-owned deadline.");
-			return Report;
-		}
-		AppendToken(BaseCanonical, Target);
-		if (const FHyperAIStudioMaterialValueSnapshot* Snapshot = ExistingSnapshots.Find(Target))
-			AppendToken(BaseCanonical, Snapshot->Revision);
-		else AppendToken(BaseCanonical, TEXT("absent"));
+		return Reject(TEXT("repair_is_evidence_only"),
+			TEXT("repair_semantic_graph only produces dry-run evidence; disconnect or remove nodes with edit_graph instead."));
 	}
-	Report.BaseRevision = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(BaseCanonical);
-	const FString SemanticFingerprint = ComputePayloadSemanticFingerprint(Operations, Report.BaseRevision);
+
+	const TSharedRef<FHyperAIStudioMaterialTypedPayload, ESPMode::ThreadSafe> Payload =
+		MakeShared<FHyperAIStudioMaterialTypedPayload, ESPMode::ThreadSafe>();
+	Payload->Operations = Operations;
+	Payload->AuthoringMode = Report.AuthoringMode;
+	FString BaseError;
+	if (!ComputeBaseRevision(Operations, Request.MaxGameThreadMs, Payload->BaseRevision, BaseError))
+	{
+		return Reject(TEXT("base_revision_unavailable"), BaseError);
+	}
+	Payload->SemanticFingerprint = SealFingerprint(*Payload);
+	Report.BaseRevision = Payload->BaseRevision;
+	if (Payload->GetBoundedByteSize() <= 0 || Payload->GetBoundedByteSize() > FHyperAIStudioDomainLimits::MaxRequestBytes)
+	{
+		return Reject(TEXT("typed_payload_exceeds_shared_bound"), TEXT("The plan is too large; split it into smaller plans."));
+	}
 	FString ExpectedPostCanonical;
 	AppendToken(ExpectedPostCanonical, TEXT("hyperai.material.expected-post-projection-set.v1"));
 	TArray<FString> ExpectedTargets;
@@ -3345,112 +4179,136 @@ FHyperAIMaterialApplyPlanReport FHyperAIStudioMaterialsContracts::BuildPlan(
 	ExpectedTargets.Sort();
 	for (const FString& Target : ExpectedTargets)
 	{
-		if (!IsBeforeDeadline(Deadline))
-		{
-			Report.Status = TEXT("planning_budget_exceeded");
-			Report.Diagnostic = TEXT("Expected projection-set sealing exhausted its caller-owned deadline.");
-			return Report;
-		}
 		AppendToken(ExpectedPostCanonical, Target);
 		AppendToken(ExpectedPostCanonical, ExpectedPostProjectionByTarget.FindChecked(Target));
 	}
-	Report.ExpectedPostProjectionFingerprint =
-		FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(ExpectedPostCanonical);
-	if (!IsBeforeDeadline(Deadline))
-	{
-		Report.Status = TEXT("planning_budget_exceeded");
-		Report.Diagnostic = TEXT("Semantic fingerprint sealing exhausted its caller-owned deadline.");
-		return Report;
-	}
-	const FString ProjectId = FHyperAIStudioExtensionRuntime::GetCanonicalProjectId();
-	if (!IsCanonicalSha256(Report.BaseRevision) || !IsCanonicalSha256(SemanticFingerprint)
-		|| !IsCanonicalSha256(Report.ExpectedPostProjectionFingerprint)
-		|| ProjectId.IsEmpty())
-	{
-		Report.Status = TEXT("semantic_identity_unavailable");
-		Report.Diagnostic = TEXT("Bounded semantic identity or canonical project identity is unavailable.");
-		return Report;
-	}
+	Report.ExpectedPostProjectionFingerprint = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(ExpectedPostCanonical);
 
-	const auto Payload = MakeShared<FHyperAIStudioMaterialTypedPayload, ESPMode::ThreadSafe>();
-	Payload->Operations = Operations;
-	Payload->BaseRevision = Report.BaseRevision;
-	Payload->SemanticFingerprint = SemanticFingerprint;
-	if (Payload->GetBoundedByteSize() <= 0
-		|| Payload->GetBoundedByteSize() > FHyperAIStudioDomainLimits::MaxRequestBytes)
+	for (const FHyperAIStudioMaterialBackendOperation& Operation : Operations)
 	{
-		Report.Status = TEXT("typed_payload_exceeds_shared_bound");
-		Report.Diagnostic = TEXT("Closed immutable Material DTO exceeds the shared request bound.");
-		return Report;
+		const bool bGraph = Operation.Kind != EKind::CreateMaterialInstance && Operation.Kind != EKind::SetInstanceParameters;
+		Report.Effects.AssetsCreated += IsCreateKind(Operation.Kind) ? 1 : 0;
+		Report.Effects.NodesCreated += Operation.Nodes.Num();
+		Report.Effects.ConnectionsCreated += Operation.Edges.Num() + Operation.Outputs.Num();
+		Report.Effects.NodesRemoved += Operation.RemoveNodeIds.Num();
+		Report.Effects.PropertiesSet += Operation.PropertyEdits.Num() + Operation.MaterialSettings.Num();
+		Report.Effects.InstancesCreated += Operation.Kind == EKind::CreateMaterialInstance ? 1 : 0;
+		Report.Effects.ParametersSet += Operation.Parameters.Num();
+		if (bGraph && Operation.Kind != EKind::RepairSemanticGraph)
+		{
+			Report.PreviewImagePaths.Add(FHyperAIStudioResultPreview::GetAssetPreviewPath(Operation.TargetPath));
+		}
 	}
+	Report.Effects.OperationCount = Operations.Num();
+	Report.Effects.TargetCount = Targets.Num();
 
-	const FHyperAIStudioDomainAdapterDescriptor& Adapter = GetAdapterDescriptor();
-	FHyperAIStudioDomainBinding Binding;
-	Binding.PackId = PackId;
-	Binding.ToolName = TEXT("hyper_material_apply_plan");
-	Binding.VariantId = MutationVariantId;
-	Binding.ExpectedSafety = EHyperAIStudioDomainSafety::Edit;
-	Binding.CanonicalProjectId = ProjectId;
-	Binding.ExpectedAdapterFingerprint = Adapter.AdapterFingerprint;
-	Binding.ExpectedAdapterGeneration = 1;
-	Binding.ExpectedRegistryEpoch = 1;
-	Binding.Prerequisites.PackId = PackId;
-	Binding.Prerequisites.bPackEnabled = true;
-	Binding.Prerequisites.Revision = 1;
-	Binding.Prerequisites.Observations = {
-		{TEXT("module.Engine"), EHyperAIStudioDomainPrerequisiteState::Available},
-		{TEXT("module.MaterialEditor"), EHyperAIStudioDomainPrerequisiteState::Available},
-		{TEXT("module.UnrealEd"), EHyperAIStudioDomainPrerequisiteState::Available}};
-	Binding.Prerequisites.Fingerprint =
-		FHyperAIStudioDomainAdapterRegistry::ComputePrerequisiteFingerprint(Binding.Prerequisites);
-	Binding.Admission.PackId = PackId;
-	Binding.Admission.bPackAdmitted = false;
-	Binding.Admission.bEditAdmitted = false;
-	Binding.Admission.Revision = 1;
-	Binding.Admission.Fingerprint =
-		FHyperAIStudioDomainAdapterRegistry::ComputeAdmissionFingerprint(Binding.Admission);
-
-	FHyperAIStudioTypedArtifactContract Contract;
-	Contract.Binding = Binding;
-	Contract.ArtifactTypeId = PayloadTypeId;
-	Contract.ArtifactSchemaFingerprint = PayloadSchemaFingerprint();
-	Contract.ArtifactSemanticFingerprint = SemanticFingerprint;
-	Contract.EffectTarget = TEXT("non_executable_material_evidence:") + Report.BaseRevision;
-	Contract.DeadlineMs = Request.DeadlineMs;
-	// Pure sealing still uses the shared mutation-plan envelope. Reserve one
-	// bounded native slot per semantic operation plus the four finalizer phases.
-	Contract.MaxNativeOperations = FMath::Max(5, Operations.Num() + 4);
-	Contract.MaxGameThreadMs = Request.MaxGameThreadMs;
-	Contract.MaxOutputBytes = Request.MaxOutputBytes;
-	Contract.MaxResultBytes = 256;
-	Contract.StageLifetimeMs = StageLifetimeMs;
-	Contract.bCompileOnce = false;
-	Contract.bSaveOnce = false;
-	// Prepare requires independent validation and fresh-CAS postconditions in
-	// the hypothetical plan. The report below still certifies zero executed phases.
-	Contract.bValidateOnce = true;
-	Contract.bVerifyFreshOnce = true;
-	FHyperAIStudioPreparedTypedArtifact Prepared;
+	FHyperAIStudioTrustedArtifactRequest Trusted;
+	Trusted.PackId = PackId;
+	Trusted.ToolName = MutationToolName;
+	Trusted.VariantId = MutationVariantId;
+	Trusted.Safety = EHyperAIStudioDomainSafety::Edit;
+	Trusted.ArtifactSemanticFingerprint = Payload->SemanticFingerprint;
+	Trusted.EffectTarget = EffectTargetOf(*Payload);
+	// Phases run one per tick and share these operation-wide budgets.
+	Trusted.DeadlineMs = FHyperAIStudioTypedArtifactLimits::MaxArtifactDeadlineMs;
+	Trusted.MaxNativeOperations = FMath::Max(5, Operations.Num() + 4);
+	Trusted.MaxGameThreadMs = FHyperAIStudioTypedArtifactLimits::MaxArtifactGameThreadMs;
+	Trusted.MaxOutputBytes = Request.MaxOutputBytes;
+	Trusted.MaxResultBytes = 256;
+	Trusted.StageLifetimeMs = StageLifetimeMs;
+	Trusted.bCompileOnce = true;
+	Trusted.bSaveOnce = true;
+	Trusted.bValidateOnce = true;
+	Trusted.bVerifyFreshOnce = true;
+	FHyperAIStudioTrustedPreparedArtifact Prepared;
+	FHyperAIStudioTrustedPrepareReport Prepare;
 	FString PrepareError;
-	if (FPlatformTime::Seconds() >= Deadline)
+	const TSharedRef<FHyperAIStudioMaterialsFreshVerifier, ESPMode::ThreadSafe> Verifier =
+		MakeShared<FHyperAIStudioMaterialsFreshVerifier, ESPMode::ThreadSafe>();
+	if (!FHyperAIStudioTrustedExecutionFacade::PrepareDryRun(Trusted, Payload, Verifier, Prepared, Prepare, PrepareError)
+		|| !Prepare.bPrepared)
 	{
-		Report.Status = TEXT("planning_budget_exceeded");
-		Report.Diagnostic = TEXT("Typed planning deadline elapsed before shared Prepare could seal the artifact.");
+		FString Diagnostic = PrepareError.IsEmpty() ? Prepare.Status.Diagnostic : PrepareError;
+		if (!Prepare.Status.BlockingPrerequisiteIds.IsEmpty())
+		{
+			Diagnostic += TEXT(" Blocking: ") + FString::Join(Prepare.Status.BlockingPrerequisiteIds, TEXT(", "));
+		}
+		return Reject(Prepare.Status.StatusCode.IsEmpty() ? TEXT("prepare_failed") : *Prepare.Status.StatusCode, Diagnostic);
+	}
+	Report.bTrustedPrepared = true;
+	// The executor's own plan hash differs between preparations of the same intent; review binds to the sealed plan.
+	Report.PlanHash = Payload->SemanticFingerprint;
+	Report.AuthorizationPlanHash = Prepare.PlanHash;
+	Report.Effects.bTypedShadowReplayComplete = true;
+	Report.Effects.bTransactionOnce = true;
+	Report.Effects.bCompileOnce = true;
+	Report.Effects.bSaveOnce = true;
+	Report.Effects.bValidateOnce = true;
+	Report.Effects.bFreshVerifyOnce = true;
+
+	if (Request.bDryRun)
+	{
+		Report.bOk = true;
+		Report.Status = TEXT("planned");
+		Report.Diagnostic = TEXT("Nothing changed. To apply, resubmit with bDryRun false, a new operation_id, and expected_plan_hash set to plan_hash.");
 		return Report;
 	}
-	if (!FHyperAIStudioTypedArtifactExecutor::Prepare(Contract, Prepared, PrepareError))
+	if (Request.ExpectedPlanHash != Payload->SemanticFingerprint)
 	{
-		Report.Status = TEXT("typed_artifact_prepare_failed");
-		Report.Diagnostic = Clip(PrepareError);
+		return Reject(TEXT("plan_hash_mismatch"),
+			TEXT("The plan changed since its dry run (operations, target state, or authoring mode). Dry-run again and review it."));
+	}
+	if (FHyperAIStudioApprovalGate::IsApprovalRequired(EHyperAIStudioDomainSafety::Edit))
+	{
+		FHyperAIStudioApprovalSummary Summary;
+		Summary.PackId = PackId;
+		Summary.ToolName = MutationToolName;
+		Summary.VariantId = MutationVariantId;
+		Summary.Safety = EHyperAIStudioDomainSafety::Edit;
+		Summary.EffectTarget = Trusted.EffectTarget;
+		Summary.PlanHash = Payload->SemanticFingerprint;
+		for (const FHyperAIStudioMaterialBackendOperation& Operation : Operations)
+		{
+			Summary.Effects.Add(DescribeOperation(Operation));
+			Summary.Touches.Add(Operation.TargetPath);
+		}
+		for (const FString& Custom : Report.CustomHlslNodes)
+		{
+			Summary.Effects.Add(TEXT("custom HLSL: ") + Custom);
+		}
+		FString ApprovalError;
+		if (!FHyperAIStudioApprovalGate::Request(Prepared, Request.OperationId, Summary, ApprovalError))
+		{
+			return Reject(TEXT("approval_not_queued"), ApprovalError);
+		}
+		Report.bOk = true;
+		Report.Status = TEXT("awaiting_user_approval");
+		Report.Diagnostic = TEXT("Waiting for approval in HyperAI Chat, Activity panel. Nothing changed yet. Poll hyper_operation_status with operation_id: it starts once approved.");
 		return Report;
 	}
-	Report.PlanHash = Prepared.PlanHash;
-	Report.bOk = false;
-	Report.bStaged = false;
-	Report.bExecutionSubmitted = false;
-	Report.bFallbackPermitted = false;
-	Report.Status = NonDryCallableState;
-	Report.Diagnostic = TEXT("Prepare produced pure non-executable DTO evidence only. No authorization/effect chain is certified; the bounded async CAS/compile/save/fresh host is required.");
+	FHyperAIStudioTypedArtifactStageReceipt Receipt;
+	FHyperAIStudioTrustedExecutionDiagnostic StageStatus;
+	FString StageError;
+	if (!FHyperAIStudioTrustedExecutionFacade::StageExact(Prepared, Request.OperationId, Receipt, StageStatus, StageError))
+	{
+		return Reject(StageStatus.StatusCode.IsEmpty() ? TEXT("stage_failed") : *StageStatus.StatusCode,
+			StageError.IsEmpty() ? StageStatus.Diagnostic : StageError);
+	}
+	Report.bStaged = true;
+	FHyperAIStudioTypedArtifactSubmissionReceipt Submission;
+	FHyperAIStudioTrustedExecutionDiagnostic SubmitStatus;
+	FString SubmitError;
+	// Edit is tokenless; only risky safety classes need a server-issued grant.
+	if (!FHyperAIStudioTrustedExecutionFacade::SubmitExact(Receipt, FString(), Submission, SubmitStatus, SubmitError))
+	{
+		Report.Status = SubmitStatus.StatusCode.IsEmpty() ? FString(TEXT("submit_failed")) : SubmitStatus.StatusCode;
+		Report.Diagnostic = SubmitError.IsEmpty() ? SubmitStatus.Diagnostic : SubmitError;
+		return Report;
+	}
+	Report.bExecutionSubmitted = true;
+	Report.bOk = true;
+	Report.Status = TEXT("submitted");
+	Report.Diagnostic = TEXT("The edit runs over the next editor ticks: apply, compile, validate, save, verify. Poll hyper_operation_status with operation_id, then hyper_material_validate for instruction counts and the preview PNG.");
 	return Report;
 }
 
@@ -3623,6 +4481,17 @@ FHyperAIMaterialValidateReport UHyperAIStudioMaterialsToolset::hyper_material_va
 		if (Issue.Severity == TEXT("error")) ++Report.ErrorCount;
 		else if (Issue.Severity == TEXT("warning")) ++Report.WarningCount;
 	}
+	Report.CustomHlslNodeIds = Snapshot.Record.CustomHlslNodeIds;
+	if (UMaterialInterface* Material = Cast<UMaterialInterface>(FSoftObjectPath(Request.TargetPath).ResolveObject()))
+	{
+		// Stats and the preview need finished shaders; until then Stats.Status says compiling and validate can be re-run.
+		Report.Stats = HyperAIStudio::Materials::Gate::ReadStats(*Material);
+		FString PreviewError;
+		if (Report.Stats.bAvailable && !FHyperAIStudioResultPreview::WriteAssetPreview(*Material, Report.PreviewImagePath, PreviewError))
+		{
+			Report.PreviewImagePath.Reset();
+		}
+	}
 	Report.bOk = true;
 	Report.bValid = Report.ErrorCount == 0 && !Report.bTruncated;
 	Report.Status = Report.bValid ? TEXT("valid") : TEXT("invalid");
@@ -3630,6 +4499,16 @@ FHyperAIMaterialValidateReport UHyperAIStudioMaterialsToolset::hyper_material_va
 		? TEXT("Independent persisted semantic graph validation passed on one fresh exact loaded capture.")
 		: TEXT("Independent validation found semantic, CAS, compile, dirty, or bound failures.");
 	return Report;
+}
+
+FHyperAIMaterialInspectReport FHyperAIStudioMaterialsContracts::Inspect(const FHyperAIMaterialInspectRequest& Request)
+{
+	return UHyperAIStudioMaterialsToolset::hyper_material_inspect(Request);
+}
+
+FHyperAIMaterialValidateReport FHyperAIStudioMaterialsContracts::Validate(const FHyperAIMaterialValidateRequest& Request)
+{
+	return UHyperAIStudioMaterialsToolset::hyper_material_validate(Request);
 }
 
 FString FHyperAIStudioMaterialTypedPayload::GetTypeId() const
@@ -3646,9 +4525,9 @@ int32 FHyperAIStudioMaterialTypedPayload::GetBoundedByteSize() const
 {
 	using namespace HyperAIStudio::Materials::Private;
 	if (Operations.IsEmpty() || Operations.Num() > FHyperAIStudioMaterialsContracts::MaxOperations
-		|| BaseRevision.Len() > 71 || SemanticFingerprint.Len() > 71)
+		|| BaseRevision.Len() > 71 || SemanticFingerprint.Len() > 71 || AuthoringMode.Len() > 16)
 		return FHyperAIStudioDomainLimits::MaxRequestBytes + 1;
-	int64 Bytes = 256ll + static_cast<int64>(BaseRevision.Len() + SemanticFingerprint.Len())
+	int64 Bytes = 256ll + static_cast<int64>(BaseRevision.Len() + SemanticFingerprint.Len() + AuthoringMode.Len())
 		* MaxUtf8BytesPerCharacter;
 	for (const FHyperAIStudioMaterialBackendOperation& Operation : Operations)
 	{
@@ -3656,8 +4535,7 @@ int32 FHyperAIStudioMaterialTypedPayload::GetBoundedByteSize() const
 			|| Operation.Nodes.Num() > FHyperAIStudioMaterialsContracts::MaxNodes
 			|| Operation.Edges.Num() > FHyperAIStudioMaterialsContracts::MaxEdges)
 			return FHyperAIStudioDomainLimits::MaxRequestBytes + 1;
-		Bytes += static_cast<int64>(CanonicalBackendOperation(Operation).Len())
-			* MaxUtf8BytesPerCharacter;
+		Bytes += static_cast<int64>(CanonicalBackendOperation(Operation).Len()) * MaxUtf8BytesPerCharacter;
 		if (Bytes > FHyperAIStudioDomainLimits::MaxRequestBytes)
 			return FHyperAIStudioDomainLimits::MaxRequestBytes + 1;
 	}
@@ -3666,19 +4544,19 @@ int32 FHyperAIStudioMaterialTypedPayload::GetBoundedByteSize() const
 
 FString FHyperAIStudioMaterialTypedPayload::GetSemanticFingerprint() const
 {
-	const FString Recomputed = FHyperAIStudioMaterialsContracts::ComputePayloadSemanticFingerprint(
-		Operations, BaseRevision);
+	const FString Recomputed = HyperAIStudio::Materials::Private::SealFingerprint(*this);
 	return Recomputed == SemanticFingerprint ? Recomputed : FString();
 }
 
 TSharedRef<const IHyperAIStudioTypedArtifactPayload, ESPMode::ThreadSafe>
 FHyperAIStudioMaterialTypedPayload::CloneImmutable() const
 {
-	// Every member is an owning value type. This copy recursively owns operation/node/edge/output arrays.
+	// Every member is an owning value type, so this copy owns every operation, node, edge and parameter.
 	TSharedRef<FHyperAIStudioMaterialTypedPayload, ESPMode::ThreadSafe> Clone =
 		MakeShared<FHyperAIStudioMaterialTypedPayload, ESPMode::ThreadSafe>();
 	Clone->Operations = Operations;
 	Clone->BaseRevision = BaseRevision;
+	Clone->AuthoringMode = AuthoringMode;
 	Clone->SemanticFingerprint = SemanticFingerprint;
 	return StaticCastSharedRef<const IHyperAIStudioTypedArtifactPayload>(Clone);
 }
@@ -3695,11 +4573,88 @@ FString FHyperAIStudioMaterialResultPayload::GetSchemaFingerprint() const
 
 int32 FHyperAIStudioMaterialResultPayload::GetBoundedByteSize() const
 {
-	const int64 Bytes = 96ll + 4ll * static_cast<int64>(Phase.Len() + Revision.Len());
+	// Same UTF-16 estimate as the other packs: "completed" plus a content hash is exactly the host's 256-byte cap.
+	const int64 Bytes = 96ll + 2ll * static_cast<int64>(Phase.Len() + Revision.Len());
 	return Bytes > FHyperAIStudioDomainLimits::MaxResultBytes
 		? FHyperAIStudioDomainLimits::MaxResultBytes + 1 : static_cast<int32>(Bytes);
 }
 
+namespace HyperAIStudio::Materials::Private
+{
+	int32 ClampBytes(const int64 Size)
+	{
+		return static_cast<int32>(FMath::Clamp<int64>(Size, 1, MAX_int32));
+	}
+}
+
+FString FHyperAIStudioMaterialInspectPayload::GetTypeId() const
+{
+	return FHyperAIStudioMaterialsContracts::InspectPayloadTypeId;
+}
+
+FString FHyperAIStudioMaterialInspectPayload::GetSchemaFingerprint() const
+{
+	return FHyperAIStudioMaterialsContracts::InspectPayloadSchemaFingerprint();
+}
+
+int32 FHyperAIStudioMaterialInspectPayload::GetBoundedByteSize() const
+{
+	return HyperAIStudio::Materials::Private::ClampBytes(
+		128 + 4ll * (Request.TargetPath.Len() + Request.ComparePath.Len() + Request.Cursor.Len()));
+}
+
+FString FHyperAIStudioMaterialValidatePayload::GetTypeId() const
+{
+	return FHyperAIStudioMaterialsContracts::ValidatePayloadTypeId;
+}
+
+FString FHyperAIStudioMaterialValidatePayload::GetSchemaFingerprint() const
+{
+	return FHyperAIStudioMaterialsContracts::ValidatePayloadSchemaFingerprint();
+}
+
+int32 FHyperAIStudioMaterialValidatePayload::GetBoundedByteSize() const
+{
+	return HyperAIStudio::Materials::Private::ClampBytes(
+		128 + 4ll * (Request.TargetPath.Len() + Request.ExpectedRevision.Len()));
+}
+
+FString FHyperAIStudioMaterialInspectResultPayload::GetTypeId() const
+{
+	return FHyperAIStudioMaterialsContracts::InspectResultTypeId;
+}
+
+FString FHyperAIStudioMaterialInspectResultPayload::GetSchemaFingerprint() const
+{
+	return FHyperAIStudioMaterialsContracts::InspectResultSchemaFingerprint();
+}
+
+int32 FHyperAIStudioMaterialInspectResultPayload::GetBoundedByteSize() const
+{
+	using namespace HyperAIStudio::Materials::Private;
+	int64 Size = 1024;
+	for (const FHyperAIMaterialNodeView& Node : Report.Target.Nodes) Size += 512 + 4ll * CanonicalNode(Node).Len();
+	for (const FHyperAIMaterialEdgeView& Edge : Report.Target.Edges) Size += 64 + 4ll * CanonicalEdge(Edge).Len();
+	return ClampBytes(Size);
+}
+
+FString FHyperAIStudioMaterialValidateResultPayload::GetTypeId() const
+{
+	return FHyperAIStudioMaterialsContracts::ValidateResultTypeId;
+}
+
+FString FHyperAIStudioMaterialValidateResultPayload::GetSchemaFingerprint() const
+{
+	return FHyperAIStudioMaterialsContracts::ValidateResultSchemaFingerprint();
+}
+
+int32 FHyperAIStudioMaterialValidateResultPayload::GetBoundedByteSize() const
+{
+	int64 Size = 1024 + 4ll * Report.PreviewImagePath.Len();
+	for (const FHyperAIMaterialIssue& Issue : Report.Issues) Size += 128 + 4ll * (Issue.Message.Len() + Issue.Code.Len());
+	for (const FString& Error : Report.Stats.CompileErrors) Size += 16 + 4ll * Error.Len();
+	return HyperAIStudio::Materials::Private::ClampBytes(Size);
+}
 
 FHyperAIStudioMaterialsDomainAdapter::FHyperAIStudioMaterialsDomainAdapter()
 	: Descriptor(FHyperAIStudioMaterialsContracts::GetAdapterDescriptor())
@@ -3715,20 +4670,166 @@ FHyperAIStudioDomainAdapterResult FHyperAIStudioMaterialsDomainAdapter::Execute(
 	const FHyperAIStudioDomainDispatchContext& Context,
 	const IHyperAIStudioDomainRequestPayload& Payload)
 {
-	using namespace HyperAIStudio::Materials::Private;
-	if (Context.ActionKind == EHyperAIStudioDomainExecutionActionKind::Apply
-		|| Context.ActionKind == EHyperAIStudioDomainExecutionActionKind::Compile
-		|| Context.ActionKind == EHyperAIStudioDomainExecutionActionKind::Save
-		|| Context.ActionKind == EHyperAIStudioDomainExecutionActionKind::Validate
-		|| Context.ActionKind == EHyperAIStudioDomainExecutionActionKind::VerifyFresh)
+	using Contracts = FHyperAIStudioMaterialsContracts;
+	FHyperAIStudioDomainAdapterResult Result;
+	Result.Outcome = EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect;
+	auto Reject = [&](const TCHAR* Status, const TCHAR* Diagnostic)
 	{
-		return Failure(
-			EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect,
-			TEXT("bounded_compile_or_runtime_cas_backend_required"),
-				TEXT("This SourceCandidate adapter is deliberately zero-effect until the central bounded async CAS host is integrated."));
+		Result.StatusCode = Status;
+		Result.Diagnostic = Diagnostic;
+		return Result;
+	};
+	auto Matches = [&](const TCHAR* Tool, const TCHAR* Variant, const EHyperAIStudioDomainSafety Safety,
+		const TCHAR* TypeId, const FString& Schema)
+	{
+		return Context.Binding.ToolName == Tool && Context.Binding.VariantId == Variant && Context.Safety == Safety
+			&& Payload.GetTypeId() == TypeId && Payload.GetSchemaFingerprint() == Schema;
+	};
+	auto Succeed = [&](const TSharedRef<IHyperAIStudioDomainResultPayload, ESPMode::ThreadSafe>& Output,
+		const FString& Status, const FString& Diagnostic)
+	{
+		Result.Outcome = EHyperAIStudioDomainDispatchOutcome::Succeeded;
+		Result.StatusCode = Status.Left(FHyperAIStudioDomainLimits::MaxStatusCodeChars);
+		Result.Diagnostic = Diagnostic.Left(FHyperAIStudioDomainLimits::MaxDiagnosticChars);
+		Result.Payload = Output;
+		return Result;
+	};
+	if (Context.Binding.PackId != Descriptor.PackId
+		|| (!Context.Binding.ExpectedAdapterFingerprint.IsEmpty()
+			&& Context.Binding.ExpectedAdapterFingerprint != Descriptor.AdapterFingerprint)
+		|| Payload.GetBoundedByteSize() <= 0
+		|| Payload.GetBoundedByteSize() > FHyperAIStudioDomainLimits::MaxRequestBytes)
+	{
+		return Reject(TEXT("typed_binding_mismatch"), TEXT("Materials adapter rejected pack, adapter, or bounded DTO identity."));
 	}
-	return Failure(EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect,
-		TEXT("material_action_kind_invalid"));
+	if (Matches(Contracts::InspectToolName, Contracts::InspectVariantId, EHyperAIStudioDomainSafety::Read,
+		Contracts::InspectPayloadTypeId, Contracts::InspectPayloadSchemaFingerprint()))
+	{
+		const TSharedRef<FHyperAIStudioMaterialInspectResultPayload, ESPMode::ThreadSafe> Output =
+			MakeShared<FHyperAIStudioMaterialInspectResultPayload, ESPMode::ThreadSafe>();
+		Output->Report = Contracts::Inspect(static_cast<const FHyperAIStudioMaterialInspectPayload&>(Payload).Request);
+		return Succeed(Output, Output->Report.Status, Output->Report.Diagnostic);
+	}
+	if (Matches(Contracts::ValidateToolName, Contracts::ValidateVariantId, EHyperAIStudioDomainSafety::Read,
+		Contracts::ValidatePayloadTypeId, Contracts::ValidatePayloadSchemaFingerprint()))
+	{
+		const TSharedRef<FHyperAIStudioMaterialValidateResultPayload, ESPMode::ThreadSafe> Output =
+			MakeShared<FHyperAIStudioMaterialValidateResultPayload, ESPMode::ThreadSafe>();
+		Output->Report = Contracts::Validate(static_cast<const FHyperAIStudioMaterialValidatePayload&>(Payload).Request);
+		return Succeed(Output, Output->Report.Status, Output->Report.Diagnostic);
+	}
+	if (Matches(Contracts::MutationToolName, Contracts::MutationVariantId, EHyperAIStudioDomainSafety::Edit,
+		Contracts::PayloadTypeId, Contracts::PayloadSchemaFingerprint()))
+	{
+		const FHyperAIStudioMaterialTypedPayload& Typed = static_cast<const FHyperAIStudioMaterialTypedPayload&>(Payload);
+		if (Typed.GetSemanticFingerprint().IsEmpty())
+		{
+			return Reject(TEXT("typed_payload_drift"), TEXT("The sealed material plan fingerprint drifted."));
+		}
+		return HyperAIStudio::Materials::Private::ExecuteEditPhase(Context.ActionKind, Typed);
+	}
+	return Reject(TEXT("typed_binding_mismatch"),
+		TEXT("Materials adapter rejected a non-exact tool, variant, safety, schema, or DTO binding."));
+}
+
+FString FHyperAIStudioMaterialsFreshVerifier::GetOwnerAdapterFingerprint() const
+{
+	return FHyperAIStudioMaterialsContracts::GetAdapterDescriptor().AdapterFingerprint;
+}
+
+bool FHyperAIStudioMaterialsFreshVerifier::ResolveCanonicalEffectTarget(
+	const IHyperAIStudioTypedArtifactPayload& Request,
+	FString& OutCanonicalEffectTarget,
+	FString& OutError)
+{
+	OutCanonicalEffectTarget.Reset();
+	OutError.Reset();
+	if (Request.GetTypeId() != FHyperAIStudioMaterialsContracts::PayloadTypeId
+		|| Request.GetSchemaFingerprint() != FHyperAIStudioMaterialsContracts::PayloadSchemaFingerprint())
+	{
+		OutError = TEXT("Fresh verifier received the wrong typed material request schema.");
+		return false;
+	}
+	const FHyperAIStudioMaterialTypedPayload& Typed = static_cast<const FHyperAIStudioMaterialTypedPayload&>(Request);
+	if (Typed.GetSemanticFingerprint().IsEmpty()
+		|| Typed.Operations.ContainsByPredicate([](const FHyperAIStudioMaterialBackendOperation& Operation)
+		{
+			return !FHyperAIStudioMaterialsContracts::IsCanonicalProjectObjectPath(Operation.TargetPath);
+		}))
+	{
+		OutError = TEXT("Fresh verifier rejected a target path or the semantic seal.");
+		return false;
+	}
+	OutCanonicalEffectTarget = HyperAIStudio::Materials::Private::EffectTargetOf(Typed);
+	return true;
+}
+
+bool FHyperAIStudioMaterialsFreshVerifier::VerifyFreshExact(
+	const IHyperAIStudioTypedArtifactPayload& Request,
+	const IHyperAIStudioDomainResultPayload& Result,
+	FString& OutPostconditionHash,
+	FString& OutError)
+{
+	using namespace HyperAIStudio::Materials::Private;
+	OutPostconditionHash.Reset();
+	OutError.Reset();
+	// The executor reports only that verification failed; the reason goes to the log.
+	ON_SCOPE_EXIT
+	{
+		if (!OutError.IsEmpty())
+		{
+			UE_LOG(LogHyperAIStudioMaterials, Warning, TEXT("Material plan verification refused: %s"), *OutError);
+		}
+	};
+	if (!IsInGameThread())
+	{
+		OutError = TEXT("Fresh material verification requires the game thread.");
+		return false;
+	}
+	FString CanonicalTarget;
+	if (!ResolveCanonicalEffectTarget(Request, CanonicalTarget, OutError)
+		|| Result.GetTypeId() != FHyperAIStudioMaterialsContracts::ResultTypeId
+		|| Result.GetSchemaFingerprint() != FHyperAIStudioMaterialsContracts::ResultSchemaFingerprint())
+	{
+		if (OutError.IsEmpty()) OutError = TEXT("Fresh verifier received the wrong result schema.");
+		return false;
+	}
+	const FHyperAIStudioMaterialTypedPayload& Typed = static_cast<const FHyperAIStudioMaterialTypedPayload&>(Request);
+	const FHyperAIStudioMaterialResultPayload& TypedResult = static_cast<const FHyperAIStudioMaterialResultPayload&>(Result);
+	if (TypedResult.Phase != TEXT("completed") || !TypedResult.bValid
+		|| !FHyperAIStudioMaterialsContracts::IsCanonicalSha256(TypedResult.Revision))
+	{
+		OutError = TEXT("Only a completed fresh-capture result may be verified.");
+		return false;
+	}
+	// Content identity, not the compile-sensitive revision: shaders may finish between capture and here.
+	const FString ContentKey = FHyperAIStudioMaterialsContracts::ComputePlanContentKey(Typed);
+	if (ContentKey != TypedResult.Revision)
+	{
+		OutError = TEXT("A target changed between fresh capture and verification.");
+		return false;
+	}
+	for (const FHyperAIStudioMaterialBackendOperation& Operation : Typed.Operations)
+	{
+		const UObject* Target = FSoftObjectPath(Operation.TargetPath).ResolveObject();
+		if (!Target || Target->GetOutermost()->IsDirty())
+		{
+			OutError = FString::Printf(TEXT("%s is missing or still has unsaved changes after the save phase."), *Operation.TargetPath);
+			return false;
+		}
+	}
+	FString Canonical;
+	AppendToken(Canonical, TEXT("hyperai.material.plan-postcondition.v2"));
+	AppendToken(Canonical, Typed.SemanticFingerprint);
+	AppendToken(Canonical, ContentKey);
+	OutPostconditionHash = FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(Canonical);
+	if (!FHyperAIStudioMaterialsContracts::IsCanonicalSha256(OutPostconditionHash))
+	{
+		OutError = TEXT("Bounded postcondition hashing failed.");
+		OutPostconditionHash.Reset();
+		return false;
+	}
+	return true;
 }
 
 void FHyperAIStudioMaterialsRegistration::Startup()
@@ -3748,30 +4849,25 @@ void FHyperAIStudioMaterialsRegistration::Shutdown()
 		FCoreDelegates::OnPostEngineInit.Remove(PostEngineInitHandle);
 		PostEngineInitHandle.Reset();
 	}
-	if (bOwnsRegistration)
-	{
-		FString Error;
-		if (!FHyperAIStudioCapabilityRuntimeIndex::UnregisterOwned(
-			UHyperAIStudioMaterialsToolset::StaticClass(),
-			FHyperAIStudioMaterialsContracts::GetQualifiedToolsetName(), Error))
-			UE_LOG(LogHyperAIStudioMaterials, Error,
-				TEXT("Materials owned unregister failed closed: %s"), *Error);
-		bOwnsRegistration = false;
-	}
+	RollBackRegistration();
 	bStarted = false;
 }
 
 bool FHyperAIStudioMaterialsRegistration::IsRegistered() const
 {
-	return bOwnsRegistration && FHyperAIStudioCapabilityRuntimeIndex::IsOwned(
-		UHyperAIStudioMaterialsToolset::StaticClass(),
-		FHyperAIStudioMaterialsContracts::GetQualifiedToolsetName());
+	return bOwnsRegistration && AdapterHandle.IsValid() && ProbeHandle.IsValid()
+		&& FHyperAIStudioCapabilityRuntimeIndex::IsOwned(
+			UHyperAIStudioMaterialsToolset::StaticClass(),
+			FHyperAIStudioMaterialsContracts::GetQualifiedToolsetName());
 }
 
 void FHyperAIStudioMaterialsRegistration::RegisterAfterEngineInit()
 {
-	if (!bStarted || bOwnsRegistration || !IsInGameThread() || !UObjectInitialized()
-		|| !UToolsetRegistry::IsAvailable()) return;
+	if (!bStarted || IsRegistered() || !IsInGameThread() || IsEngineExitRequested() || !UObjectInitialized()
+		|| !UToolsetRegistry::IsAvailable() || !FHyperAIStudioTrustedExecutionFacade::IsAvailable())
+	{
+		return;
+	}
 	if (!FHyperAIStudioMaterialsContracts::IsRegistrationAllowed(
 		FHyperAIStudioMaterialsContracts::IsPendingTestRegistrationEnabled()))
 	{
@@ -3779,11 +4875,97 @@ void FHyperAIStudioMaterialsRegistration::RegisterAfterEngineInit()
 			TEXT("Materials source cohort is not admitted; registration remains fail-closed."));
 		return;
 	}
+	if (!FModuleManager::Get().IsModuleLoaded(TEXT("MaterialEditor")))
+	{
+		return;
+	}
+	Adapter = MakeShared<FHyperAIStudioMaterialsDomainAdapter, ESPMode::ThreadSafe>();
 	FString Error;
+	if (!FHyperAIStudioTrustedExecutionFacade::RegisterAdapter(Adapter.ToSharedRef(), AdapterHandle, Error))
+	{
+		UE_LOG(LogHyperAIStudioMaterials, Error, TEXT("Materials adapter registration failed closed: %s"), *Error);
+		Adapter.Reset();
+		return;
+	}
+	if (!FHyperAIStudioTrustedExecutionFacade::RegisterLiveProbe(
+		AdapterHandle, FHyperAIStudioMaterialsContracts::LiveProbeId, ProbeHandle, Error))
+	{
+		UE_LOG(LogHyperAIStudioMaterials, Error, TEXT("Materials live-probe registration failed closed: %s"), *Error);
+		RollBackRegistration();
+		return;
+	}
+	const auto Observe = []()
+	{
+		FString Missing;
+		FHyperAIStudioTrustedProbeResult Observation;
+		const bool bKinds = HyperAIStudio::Materials::Gate::ResolveAllKinds(Missing);
+		Observation.bReady = FModuleManager::Get().IsModuleLoaded(TEXT("MaterialEditor"))
+			&& GMaxRHIShaderPlatform != SP_NumPlatforms && bKinds;
+		Observation.StatusCode = Observation.bReady ? TEXT("ready_loaded_only") : TEXT("material_editor_unavailable");
+		Observation.Diagnostic = Observation.bReady
+			? TEXT("MaterialEditor is loaded and every node catalog class resolves.")
+			: FString(TEXT("MaterialEditor, the shader platform, or node classes are unavailable. ")) + Missing;
+		return Observation;
+	};
+	const FHyperAIStudioTrustedProbeResult First = Observe();
+	if (!First.bReady || !ProbePublisher.Start(ProbeHandle, Observe, Error))
+	{
+		if (Error.IsEmpty()) Error = First.Diagnostic;
+		UE_LOG(LogHyperAIStudioMaterials, Error, TEXT("Materials live-probe publication failed closed: %s"), *Error);
+		RollBackRegistration();
+		return;
+	}
 	bOwnsRegistration = FHyperAIStudioCapabilityRuntimeIndex::RegisterOwnedToolsetClass(
 		UHyperAIStudioMaterialsToolset::StaticClass(),
 		FHyperAIStudioMaterialsContracts::GetQualifiedToolsetName(), Error);
 	if (!bOwnsRegistration)
-		UE_LOG(LogHyperAIStudioMaterials, Error,
-			TEXT("Materials central owner registration failed closed: %s"), *Error);
+	{
+		UE_LOG(LogHyperAIStudioMaterials, Error, TEXT("Materials cohort registration failed closed: %s"), *Error);
+		RollBackRegistration();
+	}
+}
+
+void FHyperAIStudioMaterialsRegistration::RollBackRegistration()
+{
+	if (!IsInGameThread())
+	{
+		return;
+	}
+	if (bOwnsRegistration && UObjectInitialized())
+	{
+		FString Error;
+		if (!FHyperAIStudioCapabilityRuntimeIndex::UnregisterOwned(
+			UHyperAIStudioMaterialsToolset::StaticClass(),
+			FHyperAIStudioMaterialsContracts::GetQualifiedToolsetName(), Error))
+		{
+			UE_LOG(LogHyperAIStudioMaterials, Error, TEXT("Materials owned-toolset rollback failed closed: %s"), *Error);
+			return;
+		}
+		bOwnsRegistration = false;
+	}
+	ProbePublisher.Stop();
+	if (ProbeHandle.IsValid())
+	{
+		FString Error;
+		if (!FHyperAIStudioTrustedExecutionFacade::UnregisterLiveProbe(ProbeHandle, Error))
+		{
+			UE_LOG(LogHyperAIStudioMaterials, Error, TEXT("Materials probe rollback failed closed: %s"), *Error);
+			return;
+		}
+		ProbeHandle = {};
+	}
+	if (AdapterHandle.IsValid())
+	{
+		FString Error;
+		const EHyperAIStudioDomainUnregisterResult Outcome =
+			FHyperAIStudioTrustedExecutionFacade::UnregisterAdapter(AdapterHandle, Error);
+		if (Outcome != EHyperAIStudioDomainUnregisterResult::Removed
+			&& Outcome != EHyperAIStudioDomainUnregisterResult::NotFound)
+		{
+			UE_LOG(LogHyperAIStudioMaterials, Error, TEXT("Materials adapter rollback failed closed: %s"), *Error);
+			return;
+		}
+		AdapterHandle = {};
+		Adapter.Reset();
+	}
 }

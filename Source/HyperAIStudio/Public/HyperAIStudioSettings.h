@@ -94,6 +94,18 @@ struct FHyperAIStudioMCPServerEntry
 	bool bEnabled = false;
 };
 
+/** How agents may build material graphs. */
+UENUM()
+enum class EHyperAIStudioMaterialAuthoringMode : uint8
+{
+	/** Graph nodes only; Custom HLSL nodes are refused. */
+	Nodes,
+	/** Custom HLSL wherever the agent likes. */
+	Hlsl,
+	/** Graph nodes, with a Custom HLSL node only where nodes cannot express the math, each with a reason. */
+	Hybrid
+};
+
 /** Model choices for one HyperAI Chat agent. */
 USTRUCT()
 struct FHyperAIStudioAgentModelRoute
@@ -261,6 +273,14 @@ public:
 	/** In Smart mode, answer Claude Code's plan approval with its auto-mode choice so building starts without you. Unreal edits still pass the approval gate. */
 	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Models")
 	bool bAutoAcceptPlansInSmartMode = true;
+
+	/**
+	 * How agents build materials. Hybrid: graph nodes, which artists can read and the compiler optimises, plus a
+	 * Custom HLSL node only for math nodes cannot express, each with a stated reason. Nodes forbids Custom HLSL;
+	 * Hlsl allows it freely.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Unreal MCP|Materials")
+	EHyperAIStudioMaterialAuthoringMode MaterialAuthoringMode = EHyperAIStudioMaterialAuthoringMode::Hybrid;
 
 	/** Model menu id for Smart: plan with SmartPlanModel, build with SmartBuildModel. */
 	static constexpr const TCHAR* SmartModelId = TEXT("smart");

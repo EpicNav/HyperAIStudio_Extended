@@ -6,6 +6,15 @@
 
 #include "HyperAIStudioCapabilityRuntimeIndex.h"
 #include "HyperAIStudioExtensionRuntime.h"
+#include "HyperAIStudioMaterialsGraphGate.h"
+#include "HyperAIStudioSettings.h"
+#include "Materials/MaterialExpressionCustom.h"
+#include "Materials/MaterialExpressionTextureCoordinate.h"
+#include "Misc/ScopeExit.h"
+#include "Containers/Ticker.h"
+#include "HyperAIStudioTrustedExecution.h"
+#include "Misc/Paths.h"
+#include "ShaderCompiler.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionAdd.h"
 #include "Materials/MaterialExpressionConstant.h"
@@ -203,13 +212,13 @@ bool FHyperAIMaterialsClosedSchemaAndMatrixTest::RunTest(const FString& Paramete
 	TestNotNull(TEXT("material row"), Material);
 	if (Material)
 	{
-		TestFalse(TEXT("mutation backend is not advertised"), Material->bCompoundBackendImplemented);
-		TestTrue(TEXT("only pure non-executable shadow evidence declared"),
-			Material->SupportedCases.Contains(
-				TEXT("pure_non_executable_compound_and_repair_shadow_evidence")));
-		TestTrue(TEXT("bounded async mutation backend gap explicit"),
-			Material->UnsupportedCases.Contains(
-				TEXT("compound_or_repair_mutation_without_bounded_async_cas_backend")));
+		TestTrue(TEXT("the node-graph backend is advertised"), Material->bCompoundBackendImplemented);
+		TestTrue(TEXT("node catalog authoring declared"),
+			Material->SupportedCases.Contains(TEXT("node_catalog_graph_authoring")));
+		TestTrue(TEXT("authoring modes declared"),
+			Material->SupportedCases.Contains(TEXT("authoring_mode_nodes_hlsl_hybrid")));
+		TestTrue(TEXT("repair stays evidence only"),
+			Material->UnsupportedCases.Contains(TEXT("repair_semantic_graph_execution")));
 		TestTrue(TEXT("Epic create delegated"), Material->DelegatedEpicCases.Contains(TEXT("create_material")));
 		TestTrue(TEXT("Epic granular connect delegated"), Material->DelegatedEpicCases.Contains(TEXT("connect_expressions")));
 		TestTrue(TEXT("dependency fanout delegated"), Material->DelegatedEpicCases.Contains(
@@ -599,25 +608,22 @@ bool FHyperAIMaterialsCompoundContradictionAndStagedSafetyTest::RunTest(const FS
 	Request.Operations.Add(CompoundOperation(Target));
 	const FHyperAIMaterialApplyPlanReport DryRun =
 		UHyperAIStudioMaterialsToolset::hyper_material_apply_plan(Request);
-	TestFalse(TEXT("dry-run evidence cannot claim executable success"), DryRun.bOk);
-	TestEqual(TEXT("dry run exact blocker"), DryRun.Status,
-		FString(TEXT("bounded_compile_or_runtime_cas_backend_required")));
-	TestFalse(TEXT("compile effect is not certified"), DryRun.Effects.bCompileOnce);
-	TestFalse(TEXT("save effect is not certified"), DryRun.Effects.bSaveOnce);
-	TestFalse(TEXT("validate effect is not certified"), DryRun.Effects.bValidateOnce);
-	TestFalse(TEXT("fresh effect is not certified"), DryRun.Effects.bFreshVerifyOnce);
-	TestFalse(TEXT("shadow replay is not advertised as executable"),
-		DryRun.Effects.bTypedShadowReplayComplete);
-	TestFalse(TEXT("transaction effect is not certified"), DryRun.Effects.bTransactionOnce);
-	TestTrue(TEXT("pure expected post-projection evidence is sealed"),
-		FHyperAIStudioMaterialsContracts::IsCanonicalSha256(
-			DryRun.ExpectedPostProjectionFingerprint));
-	TestTrue(TEXT("pure Prepare plan evidence remains canonical"),
-		FHyperAIStudioMaterialsContracts::IsCanonicalSha256(DryRun.PlanHash));
-	TestTrue(TEXT("no executable authorization hash exposed"),
-		DryRun.AuthorizationPlanHash.IsEmpty());
-	TestTrue(TEXT("no effect fingerprint exposed"), DryRun.EffectFingerprint.IsEmpty());
+	TestTrue(TEXT("a valid compound create plans: ") + DryRun.Status + TEXT(" ") + DryRun.Diagnostic, DryRun.bOk);
+	TestEqual(TEXT("dry run reports planned"), DryRun.Status, FString(TEXT("planned")));
+	TestTrue(TEXT("the trusted executor prepared it"), DryRun.bTrustedPrepared);
+	TestTrue(TEXT("every phase is planned exactly once"), DryRun.Effects.bTransactionOnce && DryRun.Effects.bCompileOnce
+		&& DryRun.Effects.bValidateOnce && DryRun.Effects.bSaveOnce && DryRun.Effects.bFreshVerifyOnce);
+	TestTrue(TEXT("expected post-projection evidence is still sealed"),
+		FHyperAIStudioMaterialsContracts::IsCanonicalSha256(DryRun.ExpectedPostProjectionFingerprint));
+	TestTrue(TEXT("plan hash is canonical"), FHyperAIStudioMaterialsContracts::IsCanonicalSha256(DryRun.PlanHash));
+	TestFalse(TEXT("the executor's authorization hash is reported"), DryRun.AuthorizationPlanHash.IsEmpty());
+	TestEqual(TEXT("the preview path is named up front"), DryRun.PreviewImagePaths.Num(), 1);
+	TestEqual(TEXT("the authoring mode is reported"), DryRun.AuthoringMode,
+		FHyperAIStudioMaterialsContracts::GetAuthoringModeName());
 	TestNull(TEXT("dry run created no UObject"), FSoftObjectPath(Target).ResolveObject());
+	const FHyperAIMaterialApplyPlanReport SecondDryRun =
+		UHyperAIStudioMaterialsToolset::hyper_material_apply_plan(Request);
+	TestEqual(TEXT("the plan hash is stable across dry runs"), SecondDryRun.PlanHash, DryRun.PlanHash);
 
 	FHyperAIMaterialPlanOperation Contradiction = CompoundOperation(
 		TEXT("/Game/__HyperAIStudioAutomation/M_Contradiction.M_Contradiction"));
@@ -654,16 +660,16 @@ bool FHyperAIMaterialsCompoundContradictionAndStagedSafetyTest::RunTest(const FS
 	FHyperAIMaterialApplyPlanRequest NonDry = Request;
 	NonDry.bDryRun = false;
 	NonDry.OperationId = TEXT("materials-automation-operation-001");
-	NonDry.ExpectedPlanHash = DryRun.PlanHash;
-	const FHyperAIMaterialApplyPlanReport Staged =
+	NonDry.ExpectedPlanHash = TEXT("sha256:") + FString::ChrN(64, TEXT('0'));
+	const FHyperAIMaterialApplyPlanReport Stale =
 		UHyperAIStudioMaterialsToolset::hyper_material_apply_plan(NonDry);
-	TestFalse(TEXT("callable mutation cannot claim success"), Staged.bOk);
-	TestFalse(TEXT("no local staging claim"), Staged.bStaged);
-	TestFalse(TEXT("no execution submitted"), Staged.bExecutionSubmitted);
-	TestFalse(TEXT("no fallback"), Staged.bFallbackPermitted);
-	TestEqual(TEXT("central bounded host required"), Staged.Status,
-		FString(TEXT("bounded_compile_or_runtime_cas_backend_required")));
-	TestNull(TEXT("non-dry callable still caused no mutation"), FSoftObjectPath(Target).ResolveObject());
+	TestFalse(TEXT("a plan hash that was not reviewed is refused"), Stale.bOk);
+	TestEqual(TEXT("plan hash mismatch reported"), Stale.Status, FString(TEXT("plan_hash_mismatch")));
+	TestFalse(TEXT("nothing staged"), Stale.bStaged || Stale.bExecutionSubmitted);
+	TestNull(TEXT("a refused plan caused no mutation"), FSoftObjectPath(Target).ResolveObject());
+	NonDry.ExpectedPlanHash.Reset();
+	TestEqual(TEXT("applying without expected_plan_hash is refused"),
+		UHyperAIStudioMaterialsToolset::hyper_material_apply_plan(NonDry).Status, FString(TEXT("operation_identity_required")));
 	return true;
 }
 
@@ -876,7 +882,7 @@ bool FHyperAIMaterialsBoundsPaginationCloneTest::RunTest(const FString& Paramete
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FHyperAIMaterialsAdapterZeroEffectTest,
-	"HyperAIStudio.NativeTools.Materials.AdapterHardZeroEffect",
+	"HyperAIStudio.NativeTools.Materials.AdapterRejectsForeignBinding",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FHyperAIMaterialsAdapterZeroEffectTest::RunTest(const FString& Parameters)
@@ -898,8 +904,8 @@ bool FHyperAIMaterialsAdapterZeroEffectTest::RunTest(const FString& Parameters)
 	{
 		Context.ActionKind = ActionKind;
 		const FHyperAIStudioDomainAdapterResult Result = Adapter.Execute(Context, Payload);
-		TestEqual(TEXT("stable backend blocker for every mutation phase"), Result.StatusCode,
-			FString(TEXT("bounded_compile_or_runtime_cas_backend_required")));
+		TestEqual(TEXT("an unbound context and empty plan are refused in every phase"), Result.StatusCode,
+			FString(TEXT("typed_binding_mismatch")));
 		TestEqual(TEXT("every mutation phase rejects before effect"),
 			static_cast<uint8>(Result.Outcome),
 			static_cast<uint8>(EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect));
@@ -909,6 +915,328 @@ bool FHyperAIMaterialsAdapterZeroEffectTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("material state id unchanged"), Material->StateId, StateBefore);
 	TestEqual(TEXT("expression collection unchanged"), Material->GetExpressions().Num(), NodeCountBefore);
 	HyperAIStudio::Materials::Tests::Discard(Material);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHyperAIMaterialsNodeCatalogTest,
+	"HyperAIStudio.NativeTools.Materials.NodeCatalogAndAuthoringModes",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHyperAIMaterialsNodeCatalogTest::RunTest(const FString& Parameters)
+{
+	namespace Gate = HyperAIStudio::Materials::Gate;
+	using EMode = EHyperAIStudioMaterialAuthoringMode;
+	FString Missing;
+	TestTrue(TEXT("every catalog class resolves: ") + Missing, Gate::ResolveAllKinds(Missing));
+	for (const Gate::FNodeKindInfo& Info : Gate::GetNodeKinds())
+	{
+		FHyperAIMaterialNodeSpec Spec;
+		Spec.Kind = Info.Kind;
+		Spec.NodeId = TEXT("probe");
+		FString Error;
+		UMaterialExpression* Shadow = Gate::MakeShadowNode(Spec, Error);
+		if (TestNotNull(*FString::Printf(TEXT("%s builds a shadow node: %s"), Info.Kind, *Error), Shadow))
+		{
+			TestEqual(TEXT("the shadow node maps back to its kind"), Gate::KindOf(*Shadow), FString(Info.Kind));
+		}
+	}
+
+	auto Write = [&](const TCHAR* Kind, const TCHAR* Key, const TCHAR* Value)
+	{
+		FHyperAIMaterialNodeSpec Spec;
+		Spec.Kind = Kind;
+		FString Error;
+		UMaterialExpression* Shadow = Gate::MakeShadowNode(Spec, Error);
+		return Shadow && Gate::WriteProperty(*Shadow, Kind, Key, Value, /*bNotify=*/false, Error);
+	};
+	TestTrue(TEXT("texcoord index in range"), Write(TEXT("texcoord"), TEXT("index"), TEXT("3")));
+	TestFalse(TEXT("texcoord index out of range"), Write(TEXT("texcoord"), TEXT("index"), TEXT("9")));
+	TestFalse(TEXT("a number must parse"), Write(TEXT("scalar_parameter"), TEXT("default"), TEXT("abc")));
+	TestFalse(TEXT("non-finite numbers are refused"), Write(TEXT("scalar_parameter"), TEXT("default"), TEXT("1e999")));
+	TestTrue(TEXT("colors parse"), Write(TEXT("constant3"), TEXT("color"), TEXT("0.2,0.4,0.6")));
+	TestFalse(TEXT("unknown keys are refused"), Write(TEXT("add"), TEXT("ParameterName"), TEXT("x")));
+	TestFalse(TEXT("texture paths must load as textures"), Write(TEXT("texture_sample"), TEXT("texture"), TEXT("/Game/Nope/Missing.Missing")));
+	TestFalse(TEXT("closed enums refuse other values"), Write(TEXT("world_position"), TEXT("offsets"), TEXT("sideways")));
+
+	FHyperAIMaterialNodeSpec CustomSpec;
+	CustomSpec.Kind = TEXT("custom_hlsl");
+	CustomSpec.NodeId = TEXT("wobble");
+	CustomSpec.Properties = {{TEXT("inputs"), TEXT("UV,Strength")}, {TEXT("additional_outputs"), TEXT("Mask:float1")},
+		{TEXT("output_type"), TEXT("float2")},
+		{TEXT("code"), TEXT("float2 o = UV; for (int i = 0; i < 4; i++) { o += sin(o * 7.0) * Strength; } Mask = o.x; return o;")}};
+	FString Error;
+	UMaterialExpression* Custom = Gate::MakeShadowNode(CustomSpec, Error);
+	if (TestNotNull(TEXT("custom shadow builds"), Custom))
+	{
+		TestTrue(TEXT("custom inputs become pins"), Gate::HasInput(*Custom, TEXT("Strength")));
+		TestTrue(TEXT("additional outputs become pins"), Gate::HasOutput(*Custom, TEXT("Mask")));
+		TestFalse(TEXT("unknown pins are refused"), Gate::HasInput(*Custom, TEXT("Nope")));
+	}
+
+	TestTrue(TEXT("a single node-expressible return is flagged"),
+		Gate::IsExpressibleWithNodes(TEXT("return saturate(A * B + 0.5);"), {TEXT("A"), TEXT("B")}));
+	TestTrue(TEXT("swizzles do not hide it"), Gate::IsExpressibleWithNodes(TEXT("return lerp(A.rgb, B.rgb, 0.5);"), {TEXT("A"), TEXT("B")}));
+	TestFalse(TEXT("loops justify custom HLSL"), Gate::IsExpressibleWithNodes(CustomSpec.Properties.Last().Value, {TEXT("UV"), TEXT("Strength")}));
+	TestFalse(TEXT("texture sampling justifies custom HLSL"),
+		Gate::IsExpressibleWithNodes(TEXT("return Texture2DSample(Tex, TexSampler, UV).r;"), {TEXT("UV")}));
+
+	auto Validate = [&](const FHyperAIStudioMaterialBackendOperation& Operation, const EMode Mode, FString& OutCode)
+	{
+		int32 Nodes = 0;
+		int32 Bytes = 0;
+		TArray<FString> CustomNodes;
+		FString Message;
+		return FHyperAIStudioMaterialsContracts::ValidateGraphOperation(Operation, nullptr, Mode, Nodes, Bytes, CustomNodes, OutCode, Message);
+	};
+	FHyperAIStudioMaterialBackendOperation Create;
+	Create.Kind = EHyperAIStudioMaterialOperationKind::CreateMaterial;
+	Create.TargetPath = TEXT("/Game/__HyperAIStudioAutomation/M_Catalog.M_Catalog");
+	FHyperAIMaterialNodeSpec Coord;
+	Coord.Kind = TEXT("texcoord");
+	Coord.NodeId = TEXT("uv");
+	FHyperAIMaterialNodeSpec Mul;
+	Mul.Kind = TEXT("multiply");
+	Mul.NodeId = TEXT("mul");
+	Mul.Properties = {{TEXT("const_b"), TEXT("4")}};
+	Create.Nodes = {Coord, Mul, CustomSpec};
+	Create.Edges = {{TEXT("uv"), FString(), TEXT("mul"), TEXT("A")}, {TEXT("mul"), FString(), TEXT("wobble"), TEXT("UV")}};
+	Create.Outputs = {{TEXT("base_color"), TEXT("wobble"), FString()}};
+	Create.MaterialSettings = {{TEXT("blend_mode"), TEXT("masked")}};
+
+	FString Code;
+	TestFalse(TEXT("Nodes mode refuses custom HLSL"), Validate(Create, EMode::Nodes, Code));
+	TestEqual(TEXT("with its code"), Code, FString(TEXT("authoring_mode_forbids_custom_hlsl")));
+	TestFalse(TEXT("Hybrid needs a justification"), Validate(Create, EMode::Hybrid, Code));
+	TestEqual(TEXT("with its code"), Code, FString(TEXT("custom_hlsl_justification_required")));
+	Create.Nodes[2].Justification = TEXT("Iterated UV warp: a loop has no node equivalent.");
+	TestTrue(TEXT("Hybrid accepts a justified node the graph cannot express: ") + Code, Validate(Create, EMode::Hybrid, Code));
+	TestTrue(TEXT("HLSL mode accepts it too"), Validate(Create, EMode::Hlsl, Code));
+	FHyperAIStudioMaterialBackendOperation Trivial = Create;
+	Trivial.Nodes[2].Properties.Last().Value = TEXT("return saturate(UV * Strength);");
+	TestFalse(TEXT("Hybrid refuses custom HLSL that is one node expression"), Validate(Trivial, EMode::Hybrid, Code));
+	TestEqual(TEXT("with its code"), Code, FString(TEXT("custom_hlsl_expressible_with_nodes")));
+	FHyperAIStudioMaterialBackendOperation BadPin = Create;
+	BadPin.Edges[0].ToInput = TEXT("Q");
+	TestFalse(TEXT("a pin that does not exist is refused"), Validate(BadPin, EMode::Hlsl, Code));
+	TestEqual(TEXT("with its code"), Code, FString(TEXT("closed_pin_not_found")));
+	FHyperAIStudioMaterialBackendOperation BadSetting = Create;
+	BadSetting.MaterialSettings = {{TEXT("blend_mode"), TEXT("glass")}};
+	TestFalse(TEXT("an unknown blend mode is refused"), Validate(BadSetting, EMode::Hlsl, Code));
+	FHyperAIStudioMaterialBackendOperation Crowded = Create;
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		FHyperAIMaterialNodeSpec Extra = Create.Nodes[2];
+		Extra.NodeId = FString::Printf(TEXT("wobble%d"), Index);
+		Crowded.Nodes.Add(Extra);
+	}
+	TestFalse(TEXT("Hybrid caps custom HLSL nodes per plan"), Validate(Crowded, EMode::Hybrid, Code));
+	TestEqual(TEXT("with its code"), Code, FString(TEXT("custom_hlsl_budget_exceeded")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHyperAIMaterialsEditGraphApplyTest,
+	"HyperAIStudio.NativeTools.Materials.EditGraphApply",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHyperAIMaterialsEditGraphApplyTest::RunTest(const FString& Parameters)
+{
+	namespace Gate = HyperAIStudio::Materials::Gate;
+	using Contracts = FHyperAIStudioMaterialsContracts;
+	FString Path;
+	UMaterial* Material = HyperAIStudio::Materials::Tests::CreateMaterialFixture(Path, 1);
+	if (!TestNotNull(TEXT("fixture"), Material)) return false;
+	ON_SCOPE_EXIT { HyperAIStudio::Materials::Tests::Discard(Material); };
+	const FString ConstantId = Gate::NodeIdOf(*Material->GetExpressions()[0]);
+
+	FHyperAIStudioMaterialBackendOperation Edit;
+	Edit.Kind = EHyperAIStudioMaterialOperationKind::EditGraph;
+	Edit.TargetPath = Path;
+	Edit.TargetFamily = TEXT("material");
+	Edit.RemoveNodeIds = {ConstantId};
+	FHyperAIMaterialNodeSpec Coord;
+	Coord.Kind = TEXT("texcoord");
+	Coord.NodeId = TEXT("uv");
+	Coord.Properties = {{TEXT("u_tiling"), TEXT("2")}};
+	FHyperAIMaterialNodeSpec Tint;
+	Tint.Kind = TEXT("vector_parameter");
+	Tint.NodeId = TEXT("tint");
+	Tint.Properties = {{TEXT("name"), TEXT("Tint")}, {TEXT("default"), TEXT("1,0.5,0.25,1")}};
+	FHyperAIMaterialNodeSpec Mul;
+	Mul.Kind = TEXT("multiply");
+	Mul.NodeId = TEXT("mul");
+	Edit.Nodes = {Coord, Tint, Mul};
+	Edit.Edges = {{TEXT("uv"), FString(), TEXT("mul"), TEXT("A")}, {TEXT("tint"), FString(), TEXT("mul"), TEXT("B")}};
+	Edit.Outputs = {{TEXT("base_color"), TEXT("mul"), FString()}};
+	Edit.MaterialSettings = {{TEXT("two_sided"), TEXT("true")}};
+
+	// A plan sealed against the wrong base is refused before any edit lands.
+	FHyperAIStudioMaterialTypedPayload Payload;
+	Payload.Operations = {Edit};
+	Payload.AuthoringMode = Contracts::GetAuthoringModeName();
+	Payload.BaseRevision = TEXT("sha256:") + FString::ChrN(64, TEXT('1'));
+	Payload.SemanticFingerprint = Contracts::ComputeSealedPlanFingerprint(Payload);
+	FHyperAIStudioDomainDispatchContext Context;
+	Context.Binding.PackId = Contracts::PackId;
+	Context.Binding.ToolName = Contracts::MutationToolName;
+	Context.Binding.VariantId = Contracts::MutationVariantId;
+	Context.Safety = EHyperAIStudioDomainSafety::Edit;
+	Context.ActionKind = EHyperAIStudioDomainExecutionActionKind::Apply;
+	FHyperAIStudioMaterialsDomainAdapter Adapter;
+	FHyperAIStudioDomainAdapterResult Result = Adapter.Execute(Context, Payload);
+	TestEqual(TEXT("a stale base is refused"), Result.StatusCode, FString(TEXT("stale_revision")));
+	TestEqual(TEXT("before any effect"), static_cast<uint8>(Result.Outcome),
+		static_cast<uint8>(EHyperAIStudioDomainDispatchOutcome::RejectedBeforeEffect));
+	TestEqual(TEXT("the graph is untouched"), Material->GetExpressions().Num(), 1);
+
+	FString BaseError;
+	TestTrue(TEXT("the fixture has a base revision: ") + BaseError,
+		Contracts::ComputePlanBaseRevision(Payload.Operations, 200, Payload.BaseRevision, BaseError));
+	Payload.SemanticFingerprint = Contracts::ComputeSealedPlanFingerprint(Payload);
+	Result = Adapter.Execute(Context, Payload);
+	TestEqual(TEXT("apply succeeds: ") + Result.Diagnostic, Result.StatusCode, FString(TEXT("applied")));
+	TestEqual(TEXT("one node removed, three added"), Material->GetExpressions().Num(), 3);
+	UMaterialExpressionTextureCoordinate* NewCoord = nullptr;
+	for (UMaterialExpression* Expression : Material->GetExpressions())
+	{
+		if (auto* Candidate = Cast<UMaterialExpressionTextureCoordinate>(Expression)) NewCoord = Candidate;
+	}
+	if (TestNotNull(TEXT("the texcoord node exists"), NewCoord))
+	{
+		TestEqual(TEXT("its property was set"), NewCoord->UTiling, 2.f);
+	}
+	const FExpressionInput* BaseColor = Material->GetExpressionInputForProperty(MP_BaseColor);
+	TestTrue(TEXT("base color is wired to the multiply"), BaseColor && BaseColor->Expression
+		&& Gate::KindOf(*BaseColor->Expression) == TEXT("multiply"));
+	TestTrue(TEXT("the material setting was written"), Material->TwoSided != 0);
+
+	FString StaleError;
+	FString StaleBase;
+	Contracts::ComputePlanBaseRevision(Payload.Operations, 200, StaleBase, StaleError);
+	TestNotEqual(TEXT("the edit changed the base, so replaying the plan is refused"), StaleBase, Payload.BaseRevision);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHyperAIMaterialsEndToEndTest,
+	"HyperAIStudio.NativeTools.Materials.EndToEndHybridMaterialAndInstance",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHyperAIMaterialsEndToEndTest::RunTest(const FString& Parameters)
+{
+	// Creates and saves a material and an instance under Content/__HyperAIStudioTests; delete that folder once done.
+	const FString Suffix = FGuid::NewGuid().ToString(EGuidFormats::Digits).Left(8).ToLower();
+	const FString MaterialName = TEXT("M_HyperAIE2E_") + Suffix;
+	const FString InstanceName = TEXT("MI_HyperAIE2E_") + Suffix;
+	const FString MaterialPath = FString::Printf(TEXT("/Game/__HyperAIStudioTests/%s.%s"), *MaterialName, *MaterialName);
+	const FString InstancePath = FString::Printf(TEXT("/Game/__HyperAIStudioTests/%s.%s"), *InstanceName, *InstanceName);
+
+	UHyperAIStudioSettings* Settings = GetMutableDefault<UHyperAIStudioSettings>();
+	const bool bPreviousApproval = Settings->bRequireApprovalForAgentEdits;
+	const EHyperAIStudioMaterialAuthoringMode PreviousMode = Settings->MaterialAuthoringMode;
+	Settings->bRequireApprovalForAgentEdits = false;
+	Settings->MaterialAuthoringMode = EHyperAIStudioMaterialAuthoringMode::Hybrid;
+	ON_SCOPE_EXIT
+	{
+		Settings->bRequireApprovalForAgentEdits = bPreviousApproval;
+		Settings->MaterialAuthoringMode = PreviousMode;
+	};
+
+	auto Node = [](const TCHAR* Kind, const TCHAR* Id, TArray<FHyperAIMaterialNodeProperty> Properties)
+	{
+		FHyperAIMaterialNodeSpec Spec;
+		Spec.Kind = Kind;
+		Spec.NodeId = Id;
+		Spec.Properties = MoveTemp(Properties);
+		return Spec;
+	};
+	FHyperAIMaterialPlanOperation Create;
+	Create.Type = TEXT("create_material");
+	Create.TargetPath = MaterialPath;
+	Create.Nodes = {
+		Node(TEXT("texcoord"), TEXT("uv"), {{TEXT("u_tiling"), TEXT("4")}, {TEXT("v_tiling"), TEXT("4")}}),
+		Node(TEXT("panner"), TEXT("pan"), {{TEXT("speed_x"), TEXT("0.05")}}),
+		Node(TEXT("texture_sample"), TEXT("tex"), {{TEXT("texture"), TEXT("/Engine/EngineResources/DefaultTexture.DefaultTexture")}}),
+		Node(TEXT("vector_parameter"), TEXT("tint"), {{TEXT("name"), TEXT("Tint")}, {TEXT("default"), TEXT("0.8,0.6,0.4,1")}}),
+		Node(TEXT("multiply"), TEXT("tinted"), {}),
+		Node(TEXT("fresnel"), TEXT("rim"), {{TEXT("exponent"), TEXT("3")}}),
+		Node(TEXT("scalar_parameter"), TEXT("rough"), {{TEXT("name"), TEXT("Roughness")}, {TEXT("default"), TEXT("0.45")}}),
+		Node(TEXT("custom_hlsl"), TEXT("ripple"), {{TEXT("inputs"), TEXT("UV")}, {TEXT("output_type"), TEXT("float1")},
+			{TEXT("code"), TEXT("float Sum = 0; for (int i = 1; i < 5; i++) { Sum += sin(UV.x * i * 6.2831) / i; } return saturate(Sum * 0.5 + 0.5);")}}),
+		Node(TEXT("multiply"), TEXT("glow"), {}),
+	};
+	Create.Nodes.Last(1).Justification = TEXT("Summed harmonic series in a loop; the node graph has no loop.");
+	Create.Edges = {
+		{TEXT("uv"), FString(), TEXT("pan"), TEXT("Coordinate")},
+		{TEXT("pan"), FString(), TEXT("tex"), TEXT("UVs")},
+		{TEXT("tex"), TEXT("RGB"), TEXT("tinted"), TEXT("A")},
+		{TEXT("tint"), FString(), TEXT("tinted"), TEXT("B")},
+		{TEXT("uv"), FString(), TEXT("ripple"), TEXT("UV")},
+		{TEXT("rim"), FString(), TEXT("glow"), TEXT("A")},
+		{TEXT("ripple"), FString(), TEXT("glow"), TEXT("B")},
+	};
+	Create.Outputs = {
+		{TEXT("base_color"), TEXT("tinted"), FString()},
+		{TEXT("roughness"), TEXT("rough"), FString()},
+		{TEXT("emissive"), TEXT("glow"), FString()},
+	};
+	FHyperAIMaterialPlanOperation Instance;
+	Instance.Type = TEXT("create_material_instance");
+	Instance.TargetPath = InstancePath;
+	Instance.ParentPath = MaterialPath;
+	Instance.Parameters = {{TEXT("Roughness"), TEXT("scalar"), TEXT("0.8")}, {TEXT("Tint"), TEXT("vector"), TEXT("0.2,0.4,1")}};
+
+	FHyperAIMaterialApplyPlanRequest Plan;
+	Plan.Operations = {Create, Instance};
+	const FHyperAIMaterialApplyPlanReport DryRun = UHyperAIStudioMaterialsToolset::hyper_material_apply_plan(Plan);
+	FString IssueText;
+	for (const FHyperAIMaterialIssue& Issue : DryRun.Issues) IssueText += Issue.Code + TEXT(": ") + Issue.Message + TEXT(" ");
+	TestTrue(*FString::Printf(TEXT("dry run plans (%s: %s %s)"), *DryRun.Status, *DryRun.Diagnostic, *IssueText), DryRun.bOk);
+	TestEqual(TEXT("the justified custom node is reported"), DryRun.CustomHlslNodes.Num(), 1);
+	if (!DryRun.bOk) return false;
+
+	Plan.bDryRun = false;
+	Plan.OperationId = TEXT("materials-e2e-") + Suffix;
+	Plan.ExpectedPlanHash = DryRun.PlanHash;
+	const FHyperAIMaterialApplyPlanReport Submitted = UHyperAIStudioMaterialsToolset::hyper_material_apply_plan(Plan);
+	TestTrue(*FString::Printf(TEXT("submission accepted (%s: %s)"), *Submitted.Status, *Submitted.Diagnostic),
+		Submitted.bExecutionSubmitted);
+	FHyperAIStudioTypedArtifactOperationStatus Status;
+	FString StatusError;
+	for (int32 Tick = 0; Tick < 600 && Submitted.bExecutionSubmitted; ++Tick)
+	{
+		FTSTicker::GetCoreTicker().Tick(0.01f);
+		if (FHyperAIStudioTrustedExecutionFacade::QueryStatus(Plan.OperationId, Status, StatusError) && Status.bTerminal) break;
+	}
+	TestEqual(*FString::Printf(TEXT("operation completed (%s)"), *Status.Diagnostic), Status.Status, FString(TEXT("completed")));
+
+	UMaterial* Material = Cast<UMaterial>(FSoftObjectPath(MaterialPath).ResolveObject());
+	UMaterialInstanceConstant* Created = Cast<UMaterialInstanceConstant>(FSoftObjectPath(InstancePath).ResolveObject());
+	if (!TestNotNull(TEXT("the material exists"), Material) || !TestNotNull(TEXT("the instance exists"), Created)) return false;
+	TestFalse(TEXT("the material was saved"), Material->GetOutermost()->IsDirty());
+	TestFalse(TEXT("the instance was saved"), Created->GetOutermost()->IsDirty());
+	TestEqual(TEXT("the instance's parent is the new material"), Created->Parent.Get(), static_cast<UMaterialInterface*>(Material));
+	float Roughness = 0.f;
+	TestTrue(TEXT("the instance overrides Roughness"), Created->GetScalarParameterValue(FName(TEXT("Roughness")), Roughness));
+	TestEqual(TEXT("to the planned value"), Roughness, 0.8f);
+
+	if (GShaderCompilingManager) GShaderCompilingManager->FinishAllCompilation();
+	FHyperAIMaterialValidateRequest ValidateRequest;
+	ValidateRequest.TargetPath = MaterialPath;
+	const FHyperAIMaterialValidateReport Validated = UHyperAIStudioMaterialsToolset::hyper_material_validate(ValidateRequest);
+	FString CompileErrors = FString::Join(Validated.Stats.CompileErrors, TEXT(" | "));
+	TestEqual(*FString::Printf(TEXT("the material compiled (%s)"), *CompileErrors), Validated.Stats.Status, FString(TEXT("compiled")));
+	TestTrue(TEXT("instruction counts are reported"), Validated.Stats.NumPixelShaderInstructions > 0);
+	TestTrue(TEXT("the texture sample is counted"), Validated.Stats.NumSamplers > 0);
+	TestEqual(TEXT("the custom node is listed"), Validated.CustomHlslNodeIds.Num(), 1);
+	if (FApp::CanEverRender())
+	{
+		TestTrue(TEXT("a preview PNG was written: ") + Validated.PreviewImagePath,
+			!Validated.PreviewImagePath.IsEmpty() && FPaths::FileExists(Validated.PreviewImagePath));
+	}
+	AddInfo(FString::Printf(TEXT("%s: %d PS instructions, %d samplers, preview %s"), *MaterialName,
+		Validated.Stats.NumPixelShaderInstructions, Validated.Stats.NumSamplers, *Validated.PreviewImagePath));
 	return true;
 }
 
