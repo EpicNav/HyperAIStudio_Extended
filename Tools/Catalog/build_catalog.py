@@ -446,8 +446,10 @@ def main(argv):
                                                             cat["GeneratedFingerprint"]))
         return 0
     if command == "check":
+        # Line endings are git's business (autocrlf); only content counts as stale.
+        lf = lambda data: data.replace(b"\r\n", b"\n")
         stale = [os.path.relpath(p, PLUGIN) for p, text in outputs.items()
-                 if not os.path.exists(p) or read_bytes(p) != text.encode("utf-8")]
+                 if not os.path.exists(p) or lf(read_bytes(p)) != lf(text.encode("utf-8"))]
         if stale:
             print("stale generated files (run build): " + ", ".join(stale))
             return 1
