@@ -12,7 +12,15 @@
 #include "HyperAIStudioExtensionRuntime.h"
 #include "HyperAIStudioSettings.h"
 #include "Misc/ScopeExit.h"
+#include "HyperAIStudioNiagaraAssetsGate.h"
 #include "HyperAIStudioNiagaraExternalEditGate.h"
+#include "NiagaraDataChannel.h"
+#include "NiagaraDataChannelAsset.h"
+#include "NiagaraDataChannelVariable.h"
+#include "NiagaraEffectType.h"
+#include "NiagaraEmitter.h"
+#include "NiagaraEmitterHandle.h"
+#include "ObjectTools.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/PackageName.h"
 #include "NiagaraEditorModule.h"
@@ -563,6 +571,201 @@ bool FHyperAIStudioNiagaraPublicApiAuditTest::RunTest(const FString& Parameters)
 		"UE 5.8 non-blocking package tri-state changed");
 	TestTrue(TEXT("public existing-ViewModel lookup API signature"), ExistingViewModelApi != nullptr);
 	TestTrue(TEXT("external edit API present"), HyperAIStudio::Niagara::ExternalEditGate::IsApiAvailable());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHyperAIStudioNiagaraEffectTypeAndDataChannelTest,
+	"HyperAIStudio.Niagara.Assets.EffectTypeAndDataChannel",
+	HyperAIStudio::Niagara::Tests::Flags)
+
+bool FHyperAIStudioNiagaraEffectTypeAndDataChannelTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	namespace Assets = HyperAIStudio::Niagara::AssetsGate;
+	const FString Suffix = FGuid::NewGuid().ToString(EGuidFormats::Digits).Left(8).ToLower();
+	const FString EffectPath = FString::Printf(TEXT("/Game/__HyperAIStudioTests/ET_HyperAI_%s.ET_HyperAI_%s"), *Suffix, *Suffix);
+	const FString ChannelPath = FString::Printf(TEXT("/Game/__HyperAIStudioTests/DC_HyperAI_%s.DC_HyperAI_%s"), *Suffix, *Suffix);
+	const FString SystemPath = TEXT("/Game/__HyperAIStudioTests/NS_Unused.NS_Unused");
+	auto Op = [](const TCHAR* Kind, const FString& AssetPath, const TCHAR* Name = TEXT(""), const TCHAR* Value = TEXT(""), const TCHAR* ValueType = TEXT(""))
+	{
+		FHyperAINiagaraEditOp Result = HyperAIStudio::Niagara::Tests::MakeOp(Kind);
+		Result.AssetPath = AssetPath;
+		Result.Name = Name;
+		Result.Value = Value;
+		Result.ValueType = ValueType;
+		return Result;
+	};
+	FString Status;
+	FString Diagnostic;
+	TSet<FString> Planned;
+	TestTrue(TEXT("a new effect type path validates"), Assets::ValidateAssetOp(Op(TEXT("create_effect_type"), EffectPath), SystemPath, Planned, Status, Diagnostic));
+	Planned.Add(EffectPath);
+	TestTrue(TEXT("settings on an effect type created earlier in the plan validate"),
+		Assets::ValidateAssetOp(Op(TEXT("set_effect_type_setting"), EffectPath, TEXT("max_distance"), TEXT("5000")), SystemPath, Planned, Status, Diagnostic));
+	TestFalse(TEXT("unknown settings are refused"),
+		Assets::ValidateAssetOp(Op(TEXT("set_effect_type_setting"), EffectPath, TEXT("max_fun"), TEXT("1")), SystemPath, Planned, Status, Diagnostic));
+	TestFalse(TEXT("enum settings outside their set are refused"),
+		Assets::ValidateAssetOp(Op(TEXT("set_effect_type_setting"), EffectPath, TEXT("update_frequency"), TEXT("sometimes")), SystemPath, Planned, Status, Diagnostic));
+	TestFalse(TEXT("an unknown channel type is refused"),
+		Assets::ValidateAssetOp(Op(TEXT("create_data_channel"), ChannelPath, TEXT(""), TEXT("Energy:float"), TEXT("sideways")), SystemPath, Planned, Status, Diagnostic));
+	TestFalse(TEXT("an unknown variable type is refused"),
+		Assets::ValidateAssetOp(Op(TEXT("create_data_channel"), ChannelPath, TEXT(""), TEXT("Energy:double"), TEXT("islands")), SystemPath, Planned, Status, Diagnostic));
+	TestFalse(TEXT("duplicate variables are refused"),
+		Assets::ValidateAssetOp(Op(TEXT("create_data_channel"), ChannelPath, TEXT(""), TEXT("A:float,a:int32"), TEXT("global")), SystemPath, Planned, Status, Diagnostic));
+	FHyperAINiagaraEditOp Addressed = Op(TEXT("create_effect_type"), ChannelPath);
+	Addressed.EmitterName = TEXT("Sparks");
+	TestFalse(TEXT("asset ops take no emitter address"), Assets::ValidateAssetOp(Addressed, SystemPath, Planned, Status, Diagnostic));
+	TestFalse(TEXT("baking an unknown capture is refused"),
+		Assets::ValidateAssetOp(Op(TEXT("bake_sim_cache"), ChannelPath, TEXT("capture-nope")), SystemPath, Planned, Status, Diagnostic));
+
+	// The two private data channel properties are written by name; this fails when UE renames or retypes them.
+	const FObjectProperty* ChannelProperty = FindFProperty<FObjectProperty>(UNiagaraDataChannelAsset::StaticClass(), TEXT("DataChannel"));
+	const FArrayProperty* VariablesProperty = FindFProperty<FArrayProperty>(UNiagaraDataChannel::StaticClass(), TEXT("ChannelVariables"));
+	TestNotNull(TEXT("UNiagaraDataChannelAsset::DataChannel still exists"), ChannelProperty);
+	TestTrue(TEXT("UNiagaraDataChannel::ChannelVariables is still an array of FNiagaraDataChannelVariable"),
+		VariablesProperty && CastField<FStructProperty>(VariablesProperty->Inner)
+		&& CastField<FStructProperty>(VariablesProperty->Inner)->Struct == FNiagaraDataChannelVariable::StaticStruct());
+
+	UNiagaraSystem* System = NewObject<UNiagaraSystem>(GetTransientPackage(), NAME_None, RF_Transient);
+	TArray<UObject*> Created;
+	ON_SCOPE_EXIT { if (!Created.IsEmpty()) ObjectTools::ForceDeleteObjects(Created, /*ShowConfirmation=*/false); };
+	TestTrue(TEXT("create_effect_type applies: ") + Diagnostic, Assets::ApplyAssetOp(*System, Op(TEXT("create_effect_type"), EffectPath), Status, Diagnostic));
+	UNiagaraEffectType* EffectType = Cast<UNiagaraEffectType>(FSoftObjectPath(EffectPath).ResolveObject());
+	if (!TestNotNull(TEXT("the effect type exists"), EffectType)) return false;
+	Created.Add(EffectType);
+	TestTrue(TEXT("max_distance applies"), Assets::ApplyAssetOp(*System, Op(TEXT("set_effect_type_setting"), EffectPath, TEXT("max_distance"), TEXT("5000")), Status, Diagnostic));
+	TestTrue(TEXT("update_frequency applies"), Assets::ApplyAssetOp(*System, Op(TEXT("set_effect_type_setting"), EffectPath, TEXT("update_frequency"), TEXT("low")), Status, Diagnostic));
+	FHyperAINiagaraAssetRecord Record;
+	TestTrue(TEXT("the effect type is described"), Assets::DescribeAsset(*EffectType, Record));
+	TestEqual(TEXT("as an effect type"), Record.Kind, FString(TEXT("effect_type")));
+	TestTrue(TEXT("with its distance budget"), Record.Details.ContainsByPredicate([](const FHyperAINiagaraKeyValue& Row)
+	{
+		return Row.Key == TEXT("max_distance") && Row.Value == TEXT("5000.0");
+	}));
+	TestEqual(TEXT("and update frequency"), EffectType->UpdateFrequency, ENiagaraScalabilityUpdateFrequency::Low);
+	TestTrue(TEXT("set_effect_type assigns it"), Assets::ApplyAssetOp(*System, Op(TEXT("set_effect_type"), EffectPath), Status, Diagnostic));
+	TestEqual(TEXT("the System reports it"), Assets::GetEffectTypePath(*System), EffectPath);
+	TestTrue(TEXT("an empty path clears it"), Assets::ApplyAssetOp(*System, Op(TEXT("set_effect_type"), FString()), Status, Diagnostic));
+	TestTrue(TEXT("and it is gone"), Assets::GetEffectTypePath(*System).IsEmpty());
+
+	TestTrue(TEXT("create_data_channel applies: ") + Diagnostic, Assets::ApplyAssetOp(*System,
+		Op(TEXT("create_data_channel"), ChannelPath, TEXT(""), TEXT("ImpactPosition:position,Energy:float,Tint:linear_color"), TEXT("islands")), Status, Diagnostic));
+	UObject* Channel = FSoftObjectPath(ChannelPath).ResolveObject();
+	if (!TestNotNull(TEXT("the data channel exists"), Channel)) return false;
+	Created.Add(Channel);
+	Record = {};
+	TestTrue(TEXT("the data channel is described"), Assets::DescribeAsset(*Channel, Record));
+	TestTrue(TEXT("as islands"), Record.Details.ContainsByPredicate([](const FHyperAINiagaraKeyValue& Row)
+	{
+		return Row.Key == TEXT("type") && Row.Value == TEXT("islands");
+	}));
+	TestEqual(TEXT("with its three variables"), Record.Details.FilterByPredicate([](const FHyperAINiagaraKeyValue& Row)
+	{
+		return Row.Key == TEXT("variable");
+	}).Num(), 3);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHyperAIStudioNiagaraSimCacheTest,
+	"HyperAIStudio.Niagara.Assets.SimCacheCaptureBakeAndRegression",
+	HyperAIStudio::Niagara::Tests::Flags)
+
+bool FHyperAIStudioNiagaraSimCacheTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	namespace Assets = HyperAIStudio::Niagara::AssetsGate;
+	// Captures need a CPU System under /Game. An unsaved copy of one of Niagara's own CPU templates serves.
+	UNiagaraSystem* Template = nullptr;
+	for (const TCHAR* Candidate : {TEXT("/Niagara/DefaultAssets/Templates/Systems/DirectionalBurst.DirectionalBurst"),
+		TEXT("/Niagara/DefaultAssets/Templates/Systems/RadialBurst.RadialBurst"),
+		TEXT("/Niagara/DefaultAssets/Templates/Systems/SimpleExplosion.SimpleExplosion")})
+	{
+		UNiagaraSystem* Loaded = Cast<UNiagaraSystem>(FSoftObjectPath(Candidate).TryLoad());
+		if (Loaded && !Loaded->HasAnyGPUEmitters())
+		{
+			Template = Loaded;
+			break;
+		}
+	}
+	if (!Template)
+	{
+		AddInfo(TEXT("Skipped: no CPU Niagara template System is available to capture."));
+		return true;
+	}
+	const FString FixtureName = TEXT("NS_HyperAICapture_") + FGuid::NewGuid().ToString(EGuidFormats::Digits).Left(8).ToLower();
+	UPackage* FixturePackage = CreatePackage(*(TEXT("/Game/__HyperAIStudioTests/") + FixtureName));
+	UNiagaraSystem* System = DuplicateObject<UNiagaraSystem>(Template, FixturePackage, FName(*FixtureName));
+	if (!TestNotNull(TEXT("the capture fixture duplicates"), System)) return false;
+	System->SetFlags(RF_Public | RF_Standalone);
+	ON_SCOPE_EXIT { ObjectTools::ForceDeleteObjects({System}, /*ShowConfirmation=*/false); };
+	const FString SystemPath = System->GetPathName();
+	// A golden comparison only means something for a repeatable simulation, so the copy turns determinism on
+	// for the System and every emitter.
+	if (FBoolProperty* Determinism = FindFProperty<FBoolProperty>(UNiagaraSystem::StaticClass(), TEXT("bDeterminism")))
+	{
+		Determinism->SetPropertyValue_InContainer(System, true);
+	}
+	for (FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+	{
+		if (FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData()) Data->bDeterminism = true;
+	}
+	System->RequestCompile(/*bForce=*/true);
+	System->WaitForCompilationComplete(/*bIncludingGPUShaders=*/true, /*bShowProgress=*/false);
+
+	auto Capture = [&](const FString& Golden, const float Delta = 1.f / 60.f)
+	{
+		FHyperAINiagaraValidateRequest Request;
+		Request.TargetPath = SystemPath;
+		Request.Policy = TEXT("sim_cache_capture");
+		Request.CaptureFrames = 12;
+		Request.CaptureDeltaSeconds = Delta;
+		FHyperAINiagaraValidateReport Report = FHyperAIStudioNiagaraContracts::Validate(Request);
+		TestEqual(*FString::Printf(TEXT("capture starts (%s)"), *Report.Diagnostic), Report.Status, FString(TEXT("capture_started")));
+		Request.CaptureId = Report.SimCache.CaptureId;
+		Request.GoldenSimCachePath = Golden;
+		for (int32 Tick = 0; Tick < 500 && Report.SimCache.State == TEXT("capturing"); ++Tick)
+		{
+			FPlatformProcess::Sleep(0.01f);
+			FTSTicker::GetCoreTicker().Tick(0.01f);
+			Report = FHyperAIStudioNiagaraContracts::Validate(Request);
+		}
+		return Report;
+	};
+
+	const FHyperAINiagaraValidateReport First = Capture(FString());
+	TestEqual(*FString::Printf(TEXT("the capture completes (%s)"), *First.SimCache.Error), First.SimCache.State, FString(TEXT("complete")));
+	TestEqual(TEXT("every frame is recorded"), First.SimCache.FramesCaptured, 12);
+	TestFalse(TEXT("emitters are listed"), First.SimCache.EmitterNames.IsEmpty());
+	if (First.SimCache.State != TEXT("complete")) return false;
+
+	const FString Suffix = FGuid::NewGuid().ToString(EGuidFormats::Digits).Left(8).ToLower();
+	const FString GoldenPath = FString::Printf(TEXT("/Game/__HyperAIStudioTests/SC_HyperAI_%s.SC_HyperAI_%s"), *Suffix, *Suffix);
+	FHyperAINiagaraEditOp Bake = HyperAIStudio::Niagara::Tests::MakeOp(TEXT("bake_sim_cache"));
+	Bake.Name = First.SimCache.CaptureId;
+	Bake.AssetPath = GoldenPath;
+	FString Status;
+	FString Diagnostic;
+	TestTrue(TEXT("a fresh capture of this System can be baked: ") + Diagnostic,
+		Assets::ValidateAssetOp(Bake, SystemPath, {}, Status, Diagnostic));
+	TestTrue(TEXT("baking applies: ") + Diagnostic, Assets::ApplyAssetOp(*System, Bake, Status, Diagnostic));
+	UObject* Golden = FSoftObjectPath(GoldenPath).ResolveObject();
+	if (!TestNotNull(TEXT("the golden cache exists"), Golden)) return false;
+	ON_SCOPE_EXIT { ObjectTools::ForceDeleteObjects({Golden}, /*ShowConfirmation=*/false); };
+	FHyperAINiagaraAssetRecord Record;
+	TestTrue(TEXT("the golden cache is described"), Assets::DescribeAsset(*Golden, Record) && Record.Kind == TEXT("sim_cache"));
+	TestFalse(TEXT("a baked capture cannot be baked twice"), Assets::ValidateAssetOp(Bake, SystemPath, {}, Status, Diagnostic));
+
+	const FHyperAINiagaraValidateReport Second = Capture(GoldenPath);
+	TestTrue(TEXT("the second capture is compared with the golden cache"), Second.SimCache.bCompared);
+	TestTrue(TEXT("the copy counts as fully deterministic"), Second.SimCache.bDeterministic);
+	TestTrue(TEXT("an unchanged deterministic System matches its golden cache: ") + FString::Join(Second.SimCache.Differences, TEXT(" | ")),
+		Second.SimCache.bMatch);
+	TestEqual(TEXT("and validate says so"), Second.Status, FString(TEXT("matches_golden")));
+	const FHyperAINiagaraValidateReport Changed = Capture(GoldenPath, 1.f / 30.f);
+	TestFalse(TEXT("a changed simulation no longer matches"), Changed.SimCache.bMatch);
+	TestFalse(TEXT("and the differences are listed"), Changed.SimCache.Differences.IsEmpty());
 	return true;
 }
 

@@ -11,6 +11,7 @@
 #include "Materials/MaterialExpressionCustom.h"
 #include "Materials/MaterialExpressionTextureCoordinate.h"
 #include "Misc/ScopeExit.h"
+#include "ObjectTools.h"
 #include "Containers/Ticker.h"
 #include "HyperAIStudioTrustedExecution.h"
 #include "Misc/Paths.h"
@@ -1125,7 +1126,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FHyperAIMaterialsEndToEndTest::RunTest(const FString& Parameters)
 {
-	// Creates and saves a material and an instance under Content/__HyperAIStudioTests; delete that folder once done.
+	// Creates a material and an instance under Content/__HyperAIStudioTests, and deletes both when it ends.
 	const FString Suffix = FGuid::NewGuid().ToString(EGuidFormats::Digits).Left(8).ToLower();
 	const FString MaterialName = TEXT("M_HyperAIE2E_") + Suffix;
 	const FString InstanceName = TEXT("MI_HyperAIE2E_") + Suffix;
@@ -1214,6 +1215,7 @@ bool FHyperAIMaterialsEndToEndTest::RunTest(const FString& Parameters)
 	UMaterial* Material = Cast<UMaterial>(FSoftObjectPath(MaterialPath).ResolveObject());
 	UMaterialInstanceConstant* Created = Cast<UMaterialInstanceConstant>(FSoftObjectPath(InstancePath).ResolveObject());
 	if (!TestNotNull(TEXT("the material exists"), Material) || !TestNotNull(TEXT("the instance exists"), Created)) return false;
+	ON_SCOPE_EXIT { ObjectTools::ForceDeleteObjects({Created, Material}, /*ShowConfirmation=*/false); };
 	TestFalse(TEXT("the material was saved"), Material->GetOutermost()->IsDirty());
 	TestFalse(TEXT("the instance was saved"), Created->GetOutermost()->IsDirty());
 	TestEqual(TEXT("the instance's parent is the new material"), Created->Parent.Get(), static_cast<UMaterialInterface*>(Material));

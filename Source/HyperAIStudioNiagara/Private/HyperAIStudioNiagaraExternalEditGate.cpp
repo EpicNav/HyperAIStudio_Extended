@@ -14,6 +14,7 @@
 #include "NiagaraSystem.h"
 #include "NiagaraTypes.h"
 #include "ScopedTransaction.h"
+#include "HyperAIStudioNiagaraAssetsGate.h"
 #include "StructUtils/InstancedStruct.h"
 #include "UObject/SoftObjectPath.h"
 
@@ -550,6 +551,14 @@ namespace HyperAIStudio::Niagara::ExternalEditGate
 				else
 				{
 					Context.Error(LOCTEXT("InvalidInputValue", "The input value no longer parses."));
+				}
+			}
+			else if (HyperAIStudio::Niagara::AssetsGate::IsAssetOp(Op.Kind))
+			{
+				FString AssetError;
+				if (!HyperAIStudio::Niagara::AssetsGate::ApplyAssetOp(System, Op, Status, AssetError))
+				{
+					Context.Error(FText::FromString(AssetError));
 				}
 			}
 			else if (Op.Kind == TEXT("apply_stack_issue_fix"))

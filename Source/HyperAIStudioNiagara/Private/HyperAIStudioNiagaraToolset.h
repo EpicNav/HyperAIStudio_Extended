@@ -89,6 +89,54 @@ struct FHyperAINiagaraHealthRecord
 	UPROPERTY() int32 ScriptCount = 0;
 	UPROPERTY() int32 GraphCount = 0;
 	UPROPERTY() int32 GraphNodeCount = 0;
+	/** The System's effect type (scalability and budgets), or empty when it has none. */
+	UPROPERTY() FString EffectTypePath;
+};
+
+USTRUCT(BlueprintType)
+struct FHyperAINiagaraKeyValue
+{
+	GENERATED_BODY()
+
+	UPROPERTY() FString Key;
+	UPROPERTY() FString Value;
+};
+
+/** An effect type, data channel or sim cache, as inspect reports it when target_path is not a System. */
+USTRUCT(BlueprintType)
+struct FHyperAINiagaraAssetRecord
+{
+	GENERATED_BODY()
+
+	/** effect_type, data_channel or sim_cache. */
+	UPROPERTY() FString Kind;
+	UPROPERTY() FString Path;
+	UPROPERTY() TArray<FHyperAINiagaraKeyValue> Details;
+};
+
+/** A simulation capture and, when a golden cache was given, how it compares. */
+USTRUCT(BlueprintType)
+struct FHyperAINiagaraSimCacheReport
+{
+	GENERATED_BODY()
+
+	UPROPERTY() FString CaptureId;
+	/** capturing, complete or failed. */
+	UPROPERTY() FString State;
+	UPROPERTY() int32 FramesRequested = 0;
+	UPROPERTY() int32 FramesCaptured = 0;
+	/** Captures of a non-deterministic System can differ run to run. */
+	UPROPERTY() bool bDeterministic = false;
+	UPROPERTY() FString Error;
+	UPROPERTY() TArray<FString> EmitterNames;
+	/** Particles alive per emitter on the last captured frame, in EmitterNames order. */
+	UPROPERTY() TArray<int32> LastFrameParticleCounts;
+	UPROPERTY() bool bCompared = false;
+	UPROPERTY() bool bMatch = false;
+	UPROPERTY() FString GoldenPath;
+	UPROPERTY() float Tolerance = 0.f;
+	/** First differences the comparison found, one per line. */
+	UPROPERTY() TArray<FString> Differences;
 };
 
 USTRUCT(BlueprintType)
@@ -170,6 +218,8 @@ struct FHyperAINiagaraInspectReport
 	UPROPERTY() TArray<FHyperAINiagaraUserParameterIdentity> UserParameters;
 	/** Present only when bIncludeTopology was requested. */
 	UPROPERTY() TArray<FHyperAINiagaraEmitterTopology> Emitters;
+	/** Filled instead of Health when target_path is an effect type, data channel or sim cache. */
+	UPROPERTY() FHyperAINiagaraAssetRecord Asset;
 	UPROPERTY() TArray<FHyperAINiagaraIssue> Issues;
 	UPROPERTY() TArray<FHyperAINiagaraCapabilityStatus> Capabilities;
 };
@@ -182,8 +232,19 @@ struct FHyperAINiagaraValidateRequest
 	UPROPERTY() FString TargetPath;
 	/** Optional exact revision assertion from inspect. */
 	UPROPERTY() FString ExpectedRevision;
-	/** authoring fails on errors; runtime_ready also fails on warnings or an incomplete compile. */
+	/**
+	 * authoring fails on errors; runtime_ready also fails on warnings or an incomplete compile.
+	 * sim_cache_capture records the System's simulation frame by frame: call once to start (returns capture_id),
+	 * then again with capture_id until complete; with golden_sim_cache_path it compares against that cache.
+	 */
 	UPROPERTY() FString Policy = TEXT("authoring");
+	/** sim_cache_capture: the id a previous call returned. */
+	UPROPERTY() FString CaptureId;
+	UPROPERTY() int32 CaptureFrames = 60;
+	UPROPERTY() float CaptureDeltaSeconds = 1.f / 60.f;
+	/** sim_cache_capture: a baked cache to compare the finished capture against. */
+	UPROPERTY() FString GoldenSimCachePath;
+	UPROPERTY() float FloatTolerance = 0.01f;
 	UPROPERTY() int32 MaxIssues = 128;
 	UPROPERTY() int32 MaxGameThreadMs = 150;
 	UPROPERTY() int32 MaxOutputBytes = 65536;
@@ -211,6 +272,8 @@ struct FHyperAINiagaraValidateReport
 	UPROPERTY() bool bCompiling = false;
 	UPROPERTY() TArray<FHyperAINiagaraIssue> Issues;
 	UPROPERTY() TArray<FHyperAINiagaraCapabilityStatus> Capabilities;
+	/** policy sim_cache_capture only. */
+	UPROPERTY() FHyperAINiagaraSimCacheReport SimCache;
 };
 
 /** One closed edit. Addresses come from hyper_niagara_inspect with bIncludeTopology; unused fields stay empty. */
@@ -219,7 +282,12 @@ struct FHyperAINiagaraEditOp
 {
 	GENERATED_BODY()
 
-	/** set_module_enabled | add_module | add_renderer | add_emitter | set_input_value | apply_stack_issue_fix */
+	/**
+	 * System edits: set_module_enabled | add_module | add_renderer | add_emitter | set_input_value | apply_stack_issue_fix.
+	 * Assets saved with the System: set_effect_type (asset_path, empty clears) | create_effect_type (asset_path) |
+	 * set_effect_type_setting (asset_path, name, value) | create_data_channel (asset_path, value_type
+	 * global|islands|gameplay_burst, value "Name:type,...") | bake_sim_cache (name = capture_id, asset_path).
+	 */
 	UPROPERTY() FString Kind;
 	/** Required for emitter scripts and renderers; empty for System* scripts. */
 	UPROPERTY() FString EmitterName;

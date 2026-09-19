@@ -9,6 +9,7 @@
 #include "EdGraphSchema_Niagara.h"
 #include "Engine/Engine.h"
 #include "FileHelpers.h"
+#include "HyperAIStudioNiagaraAssetsGate.h"
 #include "HyperAIStudioNiagaraExternalEditGate.h"
 #include "HyperAIStudioApprovalGate.h"
 #include "HyperAIStudioAsyncJobHost.h"
@@ -416,6 +417,25 @@ namespace HyperAIStudio::Niagara::Private
 	}
 
 	/** Hash of saved package identity plus dirty state: stable across async compile completion. */
+	FString ContentKeyOf(const UNiagaraSystem& System);
+
+	/** The System plus every asset the plan created or edited beside it, in op order. */
+	FString PlanContentKeyOf(const UNiagaraSystem& System, const TArray<FHyperAINiagaraEditOp>& Ops)
+	{
+		FString Canonical;
+		AppendToken(Canonical, TEXT("hyperai.niagara.plan-content.v1"));
+		AppendToken(Canonical, ContentKeyOf(System));
+		for (const FString& Path : HyperAIStudio::Niagara::AssetsGate::SideAssetPaths(Ops))
+		{
+			const UObject* Asset = FSoftObjectPath(Path).ResolveObject();
+			const UPackage* Package = Asset ? Asset->GetOutermost() : nullptr;
+			AppendToken(Canonical, Path);
+			AppendToken(Canonical, Package ? LexToString(Package->GetSavedHash()) : FString(TEXT("missing")));
+			AppendToken(Canonical, Package && Package->IsDirty() ? TEXT("dirty") : TEXT("clean"));
+		}
+		return FHyperAIStudioExtensionRuntime::ComputeBoundedSha256(Canonical);
+	}
+
 	FString ContentKeyOf(const UNiagaraSystem& System)
 	{
 		const UPackage* Package = System.GetOutermost();
@@ -554,15 +574,25 @@ namespace HyperAIStudio::Niagara::Private
 				TEXT("Structure captured. Run hyper_niagara_validate after compiling finishes for stack issues."), TEXT("validated"));
 		}
 		case EHyperAIStudioDomainExecutionActionKind::Save:
-			if (!UEditorLoadingAndSavingUtils::SavePackages({System->GetOutermost()}, /*bOnlyDirty=*/false))
+		{
+			TArray<UPackage*> Packages = {System->GetOutermost()};
+			for (const FString& Path : HyperAIStudio::Niagara::AssetsGate::SideAssetPaths(Payload.Ops))
+			{
+				if (UObject* Asset = FSoftObjectPath(Path).ResolveObject())
+				{
+					Packages.AddUnique(Asset->GetOutermost());
+				}
+			}
+			if (!UEditorLoadingAndSavingUtils::SavePackages(Packages, /*bOnlyDirty=*/false))
 			{
 				return Finish(EHyperAIStudioDomainDispatchOutcome::FailedAfterKnownEffect, TEXT("save_failed"),
 					TEXT("The edit applied but the package did not save; it remains in memory and can be undone."));
 			}
-			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("saved"), TEXT("Package saved."), TEXT("saved"));
+			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("saved"), TEXT("Packages saved."), TEXT("saved"));
+		}
 		case EHyperAIStudioDomainExecutionActionKind::VerifyFresh:
 			return Finish(EHyperAIStudioDomainDispatchOutcome::Succeeded, TEXT("fresh_captured"),
-				TEXT("Fresh content captured for verification."), TEXT("completed"), ContentKeyOf(*System));
+				TEXT("Fresh content captured for verification."), TEXT("completed"), PlanContentKeyOf(*System, Payload.Ops));
 		default:
 			return Finish(FailedOutcome, TEXT("unsupported_phase"), TEXT("Unknown execution phase."));
 		}
@@ -905,7 +935,11 @@ TArray<FHyperAINiagaraCapabilityStatus> FHyperAIStudioNiagaraContracts::GetCapab
 		TEXT("emitter_script_module_input_renderer_topology"),
 		TEXT("compile_state_and_stack_issues_with_fix_ids"),
 		TEXT("batched_edit_ops_one_undo_step"),
-		TEXT("journaled_apply_compile_validate_save_fresh_verify")};
+		TEXT("journaled_apply_compile_validate_save_fresh_verify"),
+		TEXT("effect_type_create_configure_and_assign"),
+		TEXT("data_channel_create_and_inspect"),
+		TEXT("sim_cache_capture_bake_and_golden_regression"),
+		TEXT("effect_type_data_channel_sim_cache_inspect")};
 	// Epic's NiagaraToolsets expose these as single calls. apply_plan adds batching, a revision check, one undo
 	// step, and a durable journal on top of the same engine API; it does not replace them.
 	Niagara.DelegatedEpicCallables = {
@@ -941,7 +975,9 @@ TArray<FHyperAINiagaraCapabilityStatus> FHyperAIStudioNiagaraContracts::GetCapab
 		TEXT("scratchpad_authoring"),
 		TEXT("module_reorder_through_unexported_editor_api"),
 		TEXT("event_or_simulation_stage_or_version_authoring"),
-		TEXT("data_channel_creation_without_closed_public_api"),
+		TEXT("module_or_function_script_authoring_no_exported_graph_api"),
+		TEXT("module_script_schema_from_asset_not_exported"),
+		TEXT("gpu_emitter_sim_cache_capture"),
 		TEXT("link_style_stack_issue_fixes"),
 		TEXT("broad_asset_scan_capture_or_dependency_walk"),
 		TEXT("runtime_simulation_screenshot_or_actor_spawn"),
@@ -1040,6 +1076,7 @@ bool FHyperAIStudioNiagaraContracts::CaptureExact(
 	Health.bWasLoadedFromDisk = System->HasAnyFlags(RF_WasLoaded);
 	Health.AssetGuid = CanonicalGuid(System->GetAssetGuid());
 	Health.bSystemValid = System->IsValid();
+	Health.EffectTypePath = HyperAIStudio::Niagara::AssetsGate::GetEffectTypePath(*System);
 	Health.bReadyToRun = System->IsReadyToRun();
 	Health.bExistingSystemViewModel = GetExistingSystemViewModel(System).IsValid();
 
@@ -1382,6 +1419,18 @@ FHyperAINiagaraInspectReport FHyperAIStudioNiagaraContracts::Inspect(
 			TEXT("page_size, cursor, game-thread, or output bounds are outside the closed contract."));
 	}
 
+	if (const UObject* Other = FSoftObjectPath(Request.TargetPath).ResolveObject(); Other && !Other->IsA<UNiagaraSystem>())
+	{
+		if (HyperAIStudio::Niagara::AssetsGate::DescribeAsset(*Other, Report.Asset))
+		{
+			Report.bOk = true;
+			Report.bFreshCapture = true;
+			Report.Status = TEXT("asset_described");
+			Report.Diagnostic = TEXT("Effect types, data channels and sim caches are described, not revision-tracked.");
+			return Report;
+		}
+	}
+
 	FHyperAIStudioNiagaraValueSnapshot Snapshot;
 	FString CaptureStatus;
 	FString CaptureDiagnostic;
@@ -1509,10 +1558,16 @@ FHyperAINiagaraValidateReport FHyperAIStudioNiagaraContracts::Validate(
 		return Reject(TEXT("invalid_target_path"),
 			TEXT("target_path must be one canonical top-level /Game object path."));
 	}
+	if (Request.Policy == TEXT("sim_cache_capture"))
+	{
+		FHyperAINiagaraValidateReport Capture = HyperAIStudio::Niagara::AssetsGate::RunCapturePolicy(Request);
+		Capture.Capabilities = Report.Capabilities;
+		return Capture;
+	}
 	if (Request.Policy != TEXT("authoring") && Request.Policy != TEXT("runtime_ready"))
 	{
 		return Reject(TEXT("unsupported_validation_policy"),
-			TEXT("policy must be authoring or runtime_ready."));
+			TEXT("policy must be authoring, runtime_ready or sim_cache_capture."));
 	}
 	if ((!Request.ExpectedRevision.IsEmpty() && !IsCanonicalSha256(Request.ExpectedRevision))
 		|| Request.MaxIssues < 1 || Request.MaxIssues > MaxIssues
@@ -1688,14 +1743,23 @@ FHyperAINiagaraApplyPlanReport FHyperAIStudioNiagaraContracts::BuildPlan(
 		return Reject(TEXT("external_edit_api_unavailable"),
 			TEXT("This engine build does not provide UNiagaraExternalEditUtilities."));
 	}
+	TSet<FString> PlannedAssets;
 	for (int32 Index = 0; Index < Request.Ops.Num(); ++Index)
 	{
+		const FHyperAINiagaraEditOp& Op = Request.Ops[Index];
 		FString OpStatus;
 		FString OpDiagnostic;
 		// Resolving here loads referenced module scripts or emitter templates, never the System being edited.
-		if (!Gate::ValidateOp(Request.Ops[Index], /*bResolveAssets=*/true, OpStatus, OpDiagnostic))
+		const bool bValid = HyperAIStudio::Niagara::AssetsGate::IsAssetOp(Op.Kind)
+			? HyperAIStudio::Niagara::AssetsGate::ValidateAssetOp(Op, Request.TargetPath, PlannedAssets, OpStatus, OpDiagnostic)
+			: Gate::ValidateOp(Op, /*bResolveAssets=*/true, OpStatus, OpDiagnostic);
+		if (!bValid)
 		{
 			return Reject(OpStatus, FString::Printf(TEXT("Op %d: %s"), Index, *OpDiagnostic));
+		}
+		if (Op.Kind.StartsWith(TEXT("create_")) || Op.Kind == TEXT("bake_sim_cache"))
+		{
+			PlannedAssets.Add(Op.AssetPath);
 		}
 	}
 
@@ -2070,13 +2134,19 @@ bool FHyperAIStudioNiagaraFreshVerifier::VerifyFreshExact(
 		return false;
 	}
 	// Content identity, not the compile-sensitive revision: an async compile may finish between capture and here.
-	const FString ContentKey = ContentKeyOf(*System);
+	const FString ContentKey = PlanContentKeyOf(*System, Typed.Ops);
 	if (ContentKey != TypedResult.Revision)
 	{
 		OutError = TEXT("The System changed between fresh capture and verification.");
 		return false;
 	}
-	if (Typed.bSave == System->GetOutermost()->IsDirty())
+	bool bAnyDirty = System->GetOutermost()->IsDirty();
+	for (const FString& Path : HyperAIStudio::Niagara::AssetsGate::SideAssetPaths(Typed.Ops))
+	{
+		const UObject* Asset = FSoftObjectPath(Path).ResolveObject();
+		bAnyDirty |= !Asset || Asset->GetOutermost()->IsDirty();
+	}
+	if (Typed.bSave == bAnyDirty)
 	{
 		OutError = Typed.bSave
 			? TEXT("The System still has unsaved changes after the save phase.")
