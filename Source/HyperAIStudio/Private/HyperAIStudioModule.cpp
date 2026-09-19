@@ -976,6 +976,14 @@ private:
 				{}
 			},
 			{
+				TEXT("HyperAIStudioLevelDesign"),
+				TEXT("level_design"),
+				TEXT("cohort.source.hyperaistudioleveldesigntoolset.v1"),
+				{TEXT("hyper_level_design_inspect"), TEXT("hyper_level_blockout_apply_plan"),
+					TEXT("hyper_level_design_validate")},
+				{}
+			},
+			{
 				TEXT("HyperAIStudioPCG"),
 				TEXT("pcg"),
 				TEXT("cohort.source.hyperaistudiopcgtoolset.v1"),

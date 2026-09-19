@@ -408,7 +408,7 @@ public:
 		Add(TEXT("Materials"), {TEXT("materials_dynamic_material"), TEXT("texture_graph")});
 		Add(TEXT("VFX"), {TEXT("niagara_vfx")});
 		Add(TEXT("Lighting"), {TEXT("lighting_lookdev")});
-		Add(TEXT("Level Design"), {TEXT("worldbuilding_navigation"), TEXT("pcg"), TEXT("geometry_interchange")});
+		Add(TEXT("Level Design"), {TEXT("level_design"), TEXT("worldbuilding_navigation"), TEXT("pcg"), TEXT("geometry_interchange")});
 		Add(TEXT("Animation"), {TEXT("animation_rigging"), TEXT("character")});
 		Add(TEXT("Gameplay"), {TEXT("blueprint"), TEXT("gameplay_systems"), TEXT("gas"), TEXT("gameplay_ai"), TEXT("enhanced_input")});
 		return true;

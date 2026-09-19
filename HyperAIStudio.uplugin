@@ -187,6 +187,19 @@
 			]
 		},
 		{
+			"Name": "HyperAIStudioLevelDesign",
+			"Type": "Editor",
+			"LoadingPhase": "None",
+			"PlatformAllowList": [
+				"Win64"
+			],
+			"AdditionalDependencies": [
+				"Core",
+				"CoreUObject",
+				"Engine"
+			]
+		},
+		{
 			"Name": "HyperAIStudioPCG",
 			"Type": "Editor",
 			"LoadingPhase": "None",

@@ -348,6 +348,10 @@
   {
    "id": "probe.lighting_editor_world",
    "kind": "Probe"
+  },
+  {
+   "id": "probe.level_design_editor_world",
+   "kind": "Probe"
   }
  ],
  "packs": [
@@ -1857,6 +1861,46 @@
     {
      "name": "hyper_lighting_compare",
      "cohort": "cohort.source.hyperaistudiolightingtoolset.v1",
+     "safety": [
+      "Read"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "level_design",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "level_design_backend",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.level_design_editor_world"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_level_design_inspect",
+     "cohort": "cohort.source.hyperaistudioleveldesigntoolset.v1",
+     "safety": [
+      "Read"
+     ]
+    },
+    {
+     "name": "hyper_level_blockout_apply_plan",
+     "cohort": "cohort.source.hyperaistudioleveldesigntoolset.v1",
+     "safety": [
+      "Edit"
+     ]
+    },
+    {
+     "name": "hyper_level_design_validate",
+     "cohort": "cohort.source.hyperaistudioleveldesigntoolset.v1",
      "safety": [
       "Read"
      ]
