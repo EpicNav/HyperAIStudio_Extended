@@ -344,6 +344,10 @@
   {
    "id": "probe.texture_graph_engine",
    "kind": "Probe"
+  },
+  {
+   "id": "probe.lighting_editor_world",
+   "kind": "Probe"
   }
  ],
  "packs": [
@@ -1813,6 +1817,46 @@
     {
      "name": "hyper_texture_graph_validate",
      "cohort": "cohort.source.hyperaistudiotexturegraphtoolset.v1",
+     "safety": [
+      "Read"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lighting_lookdev",
+   "tier": "Optional",
+   "dependsOn": [
+    "shared_foundation"
+   ],
+   "requirements": [
+    {
+     "id": "lighting_backend",
+     "mode": "AllOf",
+     "blocking": true,
+     "prerequisites": [
+      "probe.lighting_editor_world"
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "hyper_lighting_inspect",
+     "cohort": "cohort.source.hyperaistudiolightingtoolset.v1",
+     "safety": [
+      "Read"
+     ]
+    },
+    {
+     "name": "hyper_lighting_apply_plan",
+     "cohort": "cohort.source.hyperaistudiolightingtoolset.v1",
+     "safety": [
+      "Edit"
+     ]
+    },
+    {
+     "name": "hyper_lighting_compare",
+     "cohort": "cohort.source.hyperaistudiolightingtoolset.v1",
      "safety": [
       "Read"
      ]

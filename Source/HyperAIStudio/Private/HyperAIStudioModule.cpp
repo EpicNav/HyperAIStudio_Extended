@@ -968,6 +968,14 @@ private:
 				{TEXT("TextureGraph")}
 			},
 			{
+				TEXT("HyperAIStudioLighting"),
+				TEXT("lighting_lookdev"),
+				TEXT("cohort.source.hyperaistudiolightingtoolset.v1"),
+				{TEXT("hyper_lighting_inspect"), TEXT("hyper_lighting_apply_plan"),
+					TEXT("hyper_lighting_compare")},
+				{}
+			},
+			{
 				TEXT("HyperAIStudioPCG"),
 				TEXT("pcg"),
 				TEXT("cohort.source.hyperaistudiopcgtoolset.v1"),
