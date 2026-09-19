@@ -65,6 +65,17 @@ FHyperAIStudioAgentStateSnapshot FHyperAIStudioAgentStateEvaluator::EvaluateWith
 		return Snapshot;
 	}
 
+	// Claude's plan prompt also reads like a permission prompt ("Would you like to", "1. Yes"), so it is
+	// recognised by its approval options before the generic question patterns get a chance to claim it.
+	const FHyperAIStudioPlanApprovalChoice PlanChoice = FindPlanAutoApprovalChoice(Inputs.Tail);
+	if (PlanChoice.Digit != INDEX_NONE)
+	{
+		Snapshot.State = EHyperAIStudioAgentState::PlanReview;
+		Snapshot.Label = LOCTEXT("PlanReview", "plan to review");
+		Snapshot.Evidence = PlanChoice.Line;
+		return Snapshot;
+	}
+
 	FString Evidence;
 	if (MatchesAny(Inputs.Tail, NeedsInputPatterns, Evidence))
 	{
@@ -97,6 +108,49 @@ FHyperAIStudioAgentStateSnapshot FHyperAIStudioAgentStateEvaluator::EvaluateWith
 	Snapshot.State = EHyperAIStudioAgentState::Idle;
 	Snapshot.Label = LOCTEXT("Idle", "ready");
 	return Snapshot;
+}
+
+FHyperAIStudioPlanApprovalChoice FHyperAIStudioAgentStateEvaluator::FindPlanAutoApprovalChoice(const FString& Tail)
+{
+	FHyperAIStudioPlanApprovalChoice AutoMode;
+	FHyperAIStudioPlanApprovalChoice AutoAccept;
+	TArray<FString> Lines;
+	Tail.ParseIntoArrayLines(Lines);
+	for (const FString& Raw : Lines)
+	{
+		// Options sit inside a box border, and the highlighted one carries Claude's selection cursor.
+		FString Line = Raw.TrimStartAndEnd();
+		while (!Line.IsEmpty() && (Line[0] == TEXT('|') || Line[0] == 0x2502))
+		{
+			Line = Line.Mid(1).TrimStart();
+		}
+		bool bCursor = false;
+		if (!Line.IsEmpty() && (Line[0] == 0x276F || Line[0] == 0x203A || Line[0] == TEXT('>')))
+		{
+			bCursor = true;
+			Line = Line.Mid(1).TrimStart();
+		}
+		if (Line.Len() < 4 || !FChar::IsDigit(Line[0]) || Line[1] != TEXT('.'))
+		{
+			continue;
+		}
+		const FString Option = Line.Mid(2).TrimStart();
+		if (!Option.StartsWith(TEXT("Yes"), ESearchCase::IgnoreCase))
+		{
+			continue;
+		}
+		FHyperAIStudioPlanApprovalChoice* Target =
+			Option.Contains(TEXT("auto mode"), ESearchCase::IgnoreCase) ? &AutoMode
+			: Option.Contains(TEXT("auto-accept"), ESearchCase::IgnoreCase) ? &AutoAccept
+			: nullptr;
+		if (Target && Target->Digit == INDEX_NONE)
+		{
+			Target->Digit = Line[0] - TEXT('0');
+			Target->bCursorOnChoice = bCursor;
+			Target->Line = Line;
+		}
+	}
+	return AutoMode.Digit != INDEX_NONE ? AutoMode : AutoAccept;
 }
 
 const TCHAR* FHyperAIStudioAgentStateEvaluator::LexToString(const EHyperAIStudioAgentState State)
@@ -145,7 +199,6 @@ TArray<FString> FHyperAIStudioAgentStateEvaluator::DefaultPlanReviewPatterns()
 	return {
 		TEXT("Ready to code?"),
 		TEXT("proceed with this plan"),
-		TEXT("plan mode"),
 		TEXT("Here is the plan"),
 		TEXT("Approve plan")
 	};

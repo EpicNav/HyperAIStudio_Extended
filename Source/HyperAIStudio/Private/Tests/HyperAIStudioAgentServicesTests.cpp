@@ -259,6 +259,32 @@ bool FHyperAIStudioAgentStateTest::RunTest(const FString& Parameters)
 	Inputs.Tail = TEXT("Here is the plan 1. Rework the emitter");
 	TestEqual(TEXT("A plan is distinguished from a permission prompt"), Evaluate(Inputs).State, EHyperAIStudioAgentState::PlanReview);
 
+	// Claude Code's plan approval, drawn inside its box with the cursor on the first option.
+	const FString PlanPrompt = FString(TEXT("Would you like to proceed?\n"))
+		+ TEXT("\u2502 \u276F 1. Yes, and use auto mode             \u2502\n")
+		+ TEXT("\u2502   2. Yes, manually approve edits         \u2502\n")
+		+ TEXT("\u2502   3. No, keep planning                   \u2502\n");
+	FHyperAIStudioPlanApprovalChoice Choice = FEval::FindPlanAutoApprovalChoice(PlanPrompt);
+	TestEqual(TEXT("The auto-mode option is found"), Choice.Digit, 1);
+	TestTrue(TEXT("The cursor on it is seen"), Choice.bCursorOnChoice);
+	Inputs.Tail = PlanPrompt;
+	Snapshot = Evaluate(Inputs);
+	TestEqual(TEXT("Claude's plan prompt is plan review, not a generic question"), Snapshot.State, EHyperAIStudioAgentState::PlanReview);
+	TestTrue(TEXT("The option is the evidence"), Snapshot.Evidence.Contains(TEXT("auto mode")));
+
+	Choice = FEval::FindPlanAutoApprovalChoice(
+		TEXT("  \u276F 1. Yes, manually approve edits\n    2. Yes, and auto-accept edits\n    3. No, keep planning\n"));
+	TestEqual(TEXT("Without auto mode, auto-accept is the fallback"), Choice.Digit, 2);
+	TestFalse(TEXT("The cursor is not on the fallback yet"), Choice.bCursorOnChoice);
+	Choice = FEval::FindPlanAutoApprovalChoice(
+		TEXT("1. Yes, and auto-accept edits\n2. Yes, and use auto mode\n"));
+	TestEqual(TEXT("Auto mode wins over auto-accept"), Choice.Digit, 2);
+	TestEqual(TEXT("An edit permission prompt is never a plan approval"),
+		FEval::FindPlanAutoApprovalChoice(TEXT("Do you want to make this edit?\n\u276F 1. Yes\n  2. Yes, allow all edits during this session\n  3. No\n")).Digit,
+		static_cast<int32>(INDEX_NONE));
+	Inputs.Tail = TEXT("? for shortcuts  \u23F8 plan mode on (shift+tab to cycle)");
+	TestNotEqual(TEXT("Claude's plan-mode footer alone is not a plan to review"), Evaluate(Inputs).State, EHyperAIStudioAgentState::PlanReview);
+
 	Inputs.Tail = TEXT("Error: usage limit reached, resets at 4pm");
 	TestEqual(TEXT("A usage limit blocks"), Evaluate(Inputs).State, EHyperAIStudioAgentState::Blocked);
 

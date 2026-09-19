@@ -5,6 +5,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "HyperAIStudioAgentActivity.h"
 #include "HyperAIStudioAgentChatHistory.h"
 #include "HyperAIStudioStyle.h"
 #include "HyperAIStudioTerminalRawInput.h"
@@ -1157,6 +1158,17 @@ TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildModelMenu()
 			EUserInterfaceActionType::RadioButton);
 	};
 	AddChoice(FString(), LOCTEXT("ModelDefaultEntry", "Default"), LOCTEXT("ModelDefaultEntryTooltip", "Pass no model flag; the agent uses its own configured model."));
+	if (UHyperAIStudioSettings::IsSmartModelAgent(AgentName))
+	{
+		const UHyperAIStudioSettings* Settings = GetDefault<UHyperAIStudioSettings>();
+		AddChoice(UHyperAIStudioSettings::SmartModelId,
+			FText::Format(LOCTEXT("ModelSmartEntry", "Smart: {0} plans, {1} builds"),
+				FText::FromString(Settings->SmartPlanModel), FText::FromString(Settings->SmartBuildModel)),
+			LOCTEXT("ModelSmartEntryTooltip",
+				"Plans in plan mode with the plan model, then builds with the build model once you accept the plan. "
+				"Inside this session `opus` means the plan model and `sonnet` the build model, and the prompt cache "
+				"starts over once when building begins. Change either model, or plan auto-accept, in Settings."));
+	}
 	if (Route)
 	{
 		for (const FString& Model : Route->Models)
@@ -1189,7 +1201,9 @@ void SHyperAIStudioQuickActionWindow::SelectModel(FString ModelId)
 	Settings->SaveConfig();
 
 	// The flag only applies at process start: restart a running agent, otherwise it applies on the next start.
-	const FText ModelLabel = ModelId.IsEmpty() ? LOCTEXT("ModelDefaultLabel", "its default model") : FText::FromString(ModelId);
+	const FText ModelLabel = ModelId.IsEmpty() ? LOCTEXT("ModelDefaultLabel", "its default model")
+		: ModelId == UHyperAIStudioSettings::SmartModelId ? LOCTEXT("ModelSmartLabel", "Smart models")
+		: FText::FromString(ModelId);
 	if (!bTerminalStartupPaused)
 	{
 		LastMessage = FText::Format(LOCTEXT("ModelRestarting", "Restarting {0} with {1}."), FText::FromString(AgentName), ModelLabel);
@@ -1212,7 +1226,9 @@ FText SHyperAIStudioQuickActionWindow::GetModelButtonText() const
 {
 	const FHyperAIStudioAgentModelRoute* Route = GetDefault<UHyperAIStudioSettings>()->FindAgentModelRoute(GetSelectedAgentName());
 	return FText::Format(LOCTEXT("ModelButton", "Model: {0}"),
-		Route && !Route->SelectedModel.IsEmpty() ? FText::FromString(Route->SelectedModel) : LOCTEXT("ModelDefault", "Default"));
+		!Route || Route->SelectedModel.IsEmpty() ? LOCTEXT("ModelDefault", "Default")
+		: Route->SelectedModel == UHyperAIStudioSettings::SmartModelId ? LOCTEXT("ModelSmart", "Smart")
+		: FText::FromString(Route->SelectedModel));
 }
 
 TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildAgentSelector()
@@ -1519,6 +1535,7 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunAgentStateHeartbeat(d
 			*TerminalWidget, FHyperAIStudioAgentStateEvaluator::TailRows);
 		const double LastOutput = HyperAIStudio::TerminalRawInput::GetLastOutputTime(*TerminalWidget);
 		Inputs.SecondsSinceOutput = LastOutput > 0.0 ? FPlatformTime::Seconds() - LastOutput : -1.0;
+		AutoAcceptSmartPlan(Inputs.Tail, LastOutput);
 	}
 
 	const FHyperAIStudioAgentStateSnapshot Previous = AgentState;
@@ -1543,6 +1560,52 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunAgentStateHeartbeat(d
 		AgentState.Evidence.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" (%s)"), *AgentState.Evidence)));
 	Invalidate(EInvalidateWidgetReason::Paint);
 	return EActiveTimerReturnType::Continue;
+}
+
+void SHyperAIStudioQuickActionWindow::AutoAcceptSmartPlan(const FString& Tail, const double LastOutputTime)
+{
+	const UHyperAIStudioSettings* Settings = GetDefault<UHyperAIStudioSettings>();
+	const FHyperAIStudioAgentModelRoute* Route = Settings->FindAgentModelRoute(ActiveTerminalAgentName);
+	const bool bSmart = Settings->bAutoAcceptPlansInSmartMode
+		&& UHyperAIStudioSettings::IsSmartModelAgent(ActiveTerminalAgentName)
+		&& Route && Route->SelectedModel == UHyperAIStudioSettings::SmartModelId;
+	const FHyperAIStudioPlanApprovalChoice Choice = bSmart
+		? FHyperAIStudioAgentStateEvaluator::FindPlanAutoApprovalChoice(Tail)
+		: FHyperAIStudioPlanApprovalChoice();
+	if (Choice.Digit == INDEX_NONE)
+	{
+		bPlanAutoAcceptSent = false;
+		bPlanAutoAcceptConfirmed = false;
+		return;
+	}
+
+	if (!bPlanAutoAcceptSent)
+	{
+		const uint8 Key = static_cast<uint8>('0' + Choice.Digit);
+		if (!HyperAIStudio::TerminalRawInput::WriteRawBytes(*TerminalWidget, TConstArrayView<uint8>(&Key, 1)))
+		{
+			return;
+		}
+		bPlanAutoAcceptSent = true;
+		PlanAutoAcceptSentTime = FPlatformTime::Seconds();
+		const FString Detail = FString::Printf(TEXT("Smart mode chose \"%s\"; %s builds from here."), *Choice.Line, *Settings->SmartBuildModel);
+		AddTranscriptLine(TEXT("Plan auto-accepted. ") + Detail);
+		FHyperAIStudioActivityEntry Entry;
+		Entry.Kind = EHyperAIStudioActivityKind::ApprovalApproved;
+		Entry.ToolName = TEXT("claude_code_plan");
+		Entry.StatusCode = TEXT("plan_auto_accepted");
+		Entry.Detail = Detail;
+		FHyperAIStudioAgentActivityLog::Record(MoveTemp(Entry));
+		return;
+	}
+
+	// If the digit only moved the cursor, confirm once the screen has redrawn with it on the choice. A redraw
+	// is required first, so a frame from before the keypress can never trigger a second key.
+	if (!bPlanAutoAcceptConfirmed && Choice.bCursorOnChoice && LastOutputTime > PlanAutoAcceptSentTime)
+	{
+		const uint8 Enter = 0x0D;
+		bPlanAutoAcceptConfirmed = HyperAIStudio::TerminalRawInput::WriteRawBytes(*TerminalWidget, TConstArrayView<uint8>(&Enter, 1));
+	}
 }
 
 TSharedRef<SWidget> SHyperAIStudioQuickActionWindow::BuildAgentStateBadge()
@@ -1622,9 +1685,10 @@ EActiveTimerReturnType SHyperAIStudioQuickActionWindow::RunDeferredTerminalStart
 	const FString AgentName = GetSelectedAgentName();
 	if (const FHyperAIStudioAgentModelRoute* ModelRoute = GetDefault<UHyperAIStudioSettings>()->FindAgentModelRoute(AgentName))
 	{
+		FString ModelPrefix;
 		FString ModelArgument;
 		FString ModelError;
-		if (!UHyperAIStudioSettings::TryResolveModelArgument(*ModelRoute, ModelArgument, ModelError))
+		if (!GetDefault<UHyperAIStudioSettings>()->TryResolveModelLaunch(*ModelRoute, ModelPrefix, ModelArgument, ModelError))
 		{
 			LastMessage = FText::FromString(ModelError + TEXT(" Starting with the agent's default model."));
 			AddTranscriptLine(LastMessage.ToString());
@@ -1733,13 +1797,14 @@ FString SHyperAIStudioQuickActionWindow::GetTerminalLaunchCommandForAgent(const 
 			LaunchCommand += TEXT(" ") + ResumeArguments;
 		}
 		const FHyperAIStudioAgentModelRoute* ModelRoute = GetDefault<UHyperAIStudioSettings>()->FindAgentModelRoute(Route->Name);
+		FString ModelPrefix;
 		FString ModelArgument;
 		FString ModelError;
 		if (!LaunchCommand.IsEmpty() && ModelRoute
-			&& UHyperAIStudioSettings::TryResolveModelArgument(*ModelRoute, ModelArgument, ModelError)
+			&& GetDefault<UHyperAIStudioSettings>()->TryResolveModelLaunch(*ModelRoute, ModelPrefix, ModelArgument, ModelError)
 			&& !ModelArgument.IsEmpty())
 		{
-			LaunchCommand += TEXT(" ") + ModelArgument;
+			LaunchCommand = ModelPrefix + LaunchCommand + TEXT(" ") + ModelArgument;
 		}
 		return LaunchCommand;
 	}
@@ -1759,7 +1824,7 @@ FString SHyperAIStudioQuickActionWindow::BuildTerminalBootstrapCommandForStatus(
 	const FString Endpoint = InStatus.Endpoint.IsEmpty() ? TEXT("<not configured>") : InStatus.Endpoint;
 	const FString ResolvedProjectRoot = ProjectRoot.IsEmpty() ? FHyperAIStudioService::GetProjectRoot() : ProjectRoot;
 	TArray<FString> Commands;
-	Commands.Add(TEXT("set TERM=xterm-256color"));
+	Commands.Add(TEXT("set \"TERM=xterm-256color\""));
 	Commands.Add(FString::Printf(TEXT("cd /d \"%s\""), *ResolvedProjectRoot));
 	Commands.Add(TEXT("echo HyperAIStudio Terminal"));
 	Commands.Add(FString::Printf(TEXT("echo Status: %s"), *HyperAIStudio::QuickAction::EscapeForCmdEcho(GetReadinessTextForStatus(InStatus, InStatus.bProbeInProgress).ToString())));

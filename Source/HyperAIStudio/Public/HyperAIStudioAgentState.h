@@ -36,6 +36,17 @@ struct FHyperAIStudioAgentStateInputs
 	FString Tail;
 };
 
+/** A numbered plan-approval option that hands building straight to the agent, as found on its screen. */
+struct FHyperAIStudioPlanApprovalChoice
+{
+	/** The option's number, or INDEX_NONE when no such prompt is showing. */
+	int32 Digit = INDEX_NONE;
+	/** The agent's selection cursor is on this option. */
+	bool bCursorOnChoice = false;
+	/** The option as shown, for the tooltip and the activity log. */
+	FString Line;
+};
+
 struct FHyperAIStudioAgentStateSnapshot
 {
 	EHyperAIStudioAgentState State = EHyperAIStudioAgentState::Stopped;
@@ -67,6 +78,12 @@ public:
 		const TArray<FString>& NeedsInputPatterns,
 		const TArray<FString>& PlanReviewPatterns,
 		const TArray<FString>& BlockedPatterns);
+
+	/**
+	 * Claude Code's plan approval offers "Yes, and use auto mode", or "Yes, and auto-accept edits" where auto
+	 * mode is unavailable. Returns that option, preferring auto mode. Permission prompts offer neither.
+	 */
+	static FHyperAIStudioPlanApprovalChoice FindPlanAutoApprovalChoice(const FString& Tail);
 
 	static const TCHAR* LexToString(EHyperAIStudioAgentState State);
 	/** True while the state is one a person has to act on. */

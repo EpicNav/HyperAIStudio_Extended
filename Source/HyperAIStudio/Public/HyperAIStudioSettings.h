@@ -250,6 +250,27 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Models")
 	TArray<FHyperAIStudioAgentModelRoute> AgentModelRoutes;
 
+	/** Model Claude Code plans with when the Model menu is set to Smart. */
+	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Models")
+	FString SmartPlanModel = TEXT("claude-fable-5-1");
+
+	/** Model Claude Code builds with once a Smart plan is accepted. */
+	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Models")
+	FString SmartBuildModel = TEXT("claude-opus-5");
+
+	/** In Smart mode, answer Claude Code's plan approval with its auto-mode choice so building starts without you. Unreal edits still pass the approval gate. */
+	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Models")
+	bool bAutoAcceptPlansInSmartMode = true;
+
+	/** Model menu id for Smart: plan with SmartPlanModel, build with SmartBuildModel. */
+	static constexpr const TCHAR* SmartModelId = TEXT("smart");
+
+	/** Smart relies on Claude Code's opusplan alias, so only Claude Code offers it. */
+	static bool IsSmartModelAgent(const FString& AgentName)
+	{
+		return AgentName.Equals(TEXT("Claude Code"), ESearchCase::IgnoreCase);
+	}
+
 	/** Shows the fast local title-based comment action in Blueprint/PCG graph context menus. */
 	UPROPERTY(Config, EditAnywhere, Category = "Agent Workflow|Blueprint Context Menu", meta = (
 		DisplayName = "Show Quick Auto Comment in Blueprint Menu",
@@ -329,18 +350,7 @@ public:
 			return true;
 		}
 
-		auto IsAsciiAlnum = [](TCHAR Char)
-		{
-			return (Char >= TEXT('0') && Char <= TEXT('9')) || (Char >= TEXT('a') && Char <= TEXT('z')) || (Char >= TEXT('A') && Char <= TEXT('Z'));
-		};
-		// A leading '-' would make the id read as another flag.
-		bool bModelSafe = Model.Len() <= 128 && IsAsciiAlnum(Model[0]);
-		for (const TCHAR Char : Model)
-		{
-			bModelSafe &= IsAsciiAlnum(Char) || Char == TEXT('.') || Char == TEXT('_') || Char == TEXT('-')
-				|| Char == TEXT(':') || Char == TEXT('/') || Char == TEXT('@');
-		}
-		if (!bModelSafe)
+		if (!IsSafeModelId(Model))
 		{
 			OutError = FString::Printf(TEXT("Model \"%s\" is not a plain model id, so it was not passed to the agent."), *Model);
 			return false;
@@ -370,6 +380,61 @@ public:
 
 		OutArgument = Format.Replace(TEXT("{0}"), *Model, ESearchCase::CaseSensitive);
 		return true;
+	}
+
+	/** A plain model id. It lands in a cmd.exe line, so no shell characters, and no leading '-' that would read as a flag. */
+	static bool IsSafeModelId(const FString& Model)
+	{
+		auto IsAsciiAlnum = [](TCHAR Char)
+		{
+			return (Char >= TEXT('0') && Char <= TEXT('9')) || (Char >= TEXT('a') && Char <= TEXT('z')) || (Char >= TEXT('A') && Char <= TEXT('Z'));
+		};
+		bool bSafe = !Model.IsEmpty() && Model.Len() <= 128 && IsAsciiAlnum(Model[0]);
+		for (const TCHAR Char : Model)
+		{
+			bSafe &= IsAsciiAlnum(Char) || Char == TEXT('.') || Char == TEXT('_') || Char == TEXT('-')
+				|| Char == TEXT(':') || Char == TEXT('/') || Char == TEXT('@');
+		}
+		return bSafe;
+	}
+
+	/**
+	 * Claude Code's Smart launch. The opusplan alias runs whatever `opus` names while in plan mode and whatever
+	 * `sonnet` names otherwise; these two variables re-point those names. OutPrefix goes inside the agent's own
+	 * launch parentheses so only that process sees them, and the quoted `set "NAME=value"` form keeps cmd from
+	 * storing the space before `&&` in the value.
+	 */
+	static bool TryBuildSmartModelLaunch(const FString& PlanModel, const FString& BuildModel, FString& OutPrefix, FString& OutArgument, FString& OutError)
+	{
+		OutPrefix.Reset();
+		OutArgument.Reset();
+		OutError.Reset();
+		if (!IsSafeModelId(PlanModel) || !IsSafeModelId(BuildModel))
+		{
+			OutError = FString::Printf(TEXT("Smart plan model \"%s\" and build model \"%s\" must both be plain model ids."), *PlanModel, *BuildModel);
+			return false;
+		}
+		OutPrefix = FString::Printf(
+			TEXT("set \"ANTHROPIC_DEFAULT_OPUS_MODEL=%s\" && set \"ANTHROPIC_DEFAULT_SONNET_MODEL=%s\" && "), *PlanModel, *BuildModel);
+		OutArgument = TEXT("--model opusplan");
+		return true;
+	}
+
+	/** Route's launch prefix and model argument, Smart included. Same contract as TryResolveModelArgument. */
+	bool TryResolveModelLaunch(const FHyperAIStudioAgentModelRoute& Route, FString& OutPrefix, FString& OutArgument, FString& OutError) const
+	{
+		OutPrefix.Reset();
+		if (Route.SelectedModel != SmartModelId)
+		{
+			return TryResolveModelArgument(Route, OutArgument, OutError);
+		}
+		if (!IsSmartModelAgent(Route.AgentName))
+		{
+			OutArgument.Reset();
+			OutError = FString::Printf(TEXT("Smart is only available for Claude Code, not %s."), *Route.AgentName);
+			return false;
+		}
+		return TryBuildSmartModelLaunch(SmartPlanModel, SmartBuildModel, OutPrefix, OutArgument, OutError);
 	}
 
 	bool IsBuiltInAgentEnabled(const FString& AgentName) const

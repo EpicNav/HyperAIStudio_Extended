@@ -78,6 +78,8 @@ private:
 	EActiveTimerReturnType RunStatusHeartbeat(double CurrentTime, float DeltaTime);
 	/** Re-reads what this tab's agent is showing and updates the tab label when it changes. */
 	EActiveTimerReturnType RunAgentStateHeartbeat(double CurrentTime, float DeltaTime);
+	/** Smart mode: answers Claude's plan prompt with its auto-mode option, once per prompt. */
+	void AutoAcceptSmartPlan(const FString& Tail, double LastOutputTime);
 	TSharedRef<SWidget> BuildAgentStateBadge();
 	FSlateColor GetAgentStateColor() const;
 	FText GetTabLabel() const;
@@ -136,4 +138,8 @@ private:
 	TWeakPtr<class SDockTab> OwnerTab;
 	int32 TabIndex = 1;
 	FHyperAIStudioAgentStateSnapshot AgentState;
+	/** The option digit went to the plan prompt now showing; cleared once that prompt leaves the screen. */
+	bool bPlanAutoAcceptSent = false;
+	bool bPlanAutoAcceptConfirmed = false;
+	double PlanAutoAcceptSentTime = 0.0;
 };

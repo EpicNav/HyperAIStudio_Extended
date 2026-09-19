@@ -70,6 +70,39 @@ bool FHyperAIStudioAgentModelTest::RunTest(const FString& Parameters)
 		Seeded.SelectedModel = TEXT("sonnet");
 		TestTrue(TEXT("Every seeded route resolves with a seeded model"), UHyperAIStudioSettings::TryResolveModelArgument(Seeded, Argument, Error));
 	}
+
+	// Smart: plan with one model, build with another, through Claude Code's opusplan alias.
+	FString Prefix;
+	TestTrue(TEXT("Smart builds a launch"), UHyperAIStudioSettings::TryBuildSmartModelLaunch(
+		TEXT("claude-fable-5-1"), TEXT("claude-opus-5"), Prefix, Argument, Error));
+	TestEqual(TEXT("Smart re-points the plan and build aliases, quoted so cmd keeps no trailing space"), Prefix,
+		FString(TEXT("set \"ANTHROPIC_DEFAULT_OPUS_MODEL=claude-fable-5-1\" && set \"ANTHROPIC_DEFAULT_SONNET_MODEL=claude-opus-5\" && ")));
+	TestEqual(TEXT("Smart launches with opusplan"), Argument, FString(TEXT("--model opusplan")));
+	for (const TCHAR* Unsafe : { TEXT("opus & calc"), TEXT("opus\" & calc"), TEXT("opus 5"), TEXT(""), TEXT("-opus") })
+	{
+		TestFalse(*FString::Printf(TEXT("Smart refuses the plan model '%s'"), Unsafe),
+			UHyperAIStudioSettings::TryBuildSmartModelLaunch(Unsafe, TEXT("claude-opus-5"), Prefix, Argument, Error));
+		TestTrue(TEXT("A refused Smart launch produces nothing"), Prefix.IsEmpty() && Argument.IsEmpty());
+		TestFalse(*FString::Printf(TEXT("Smart refuses the build model '%s'"), Unsafe),
+			UHyperAIStudioSettings::TryBuildSmartModelLaunch(TEXT("claude-fable-5-1"), Unsafe, Prefix, Argument, Error));
+	}
+
+	Settings->SmartPlanModel = TEXT("claude-fable-5-1");
+	Settings->SmartBuildModel = TEXT("claude-opus-5");
+	FHyperAIStudioAgentModelRoute SmartRoute;
+	SmartRoute.AgentName = TEXT("Claude Code");
+	SmartRoute.SelectedModel = UHyperAIStudioSettings::SmartModelId;
+	TestTrue(TEXT("Smart resolves for Claude Code without being in its model list"),
+		Settings->TryResolveModelLaunch(SmartRoute, Prefix, Argument, Error));
+	TestEqual(TEXT("Smart resolution uses the settings' models"), Argument, FString(TEXT("--model opusplan")));
+	SmartRoute.AgentName = TEXT("Codex");
+	TestFalse(TEXT("Smart is refused for agents without opusplan"), Settings->TryResolveModelLaunch(SmartRoute, Prefix, Argument, Error));
+	SmartRoute.AgentName = TEXT("Claude Code");
+	SmartRoute.SelectedModel = TEXT("opus");
+	SmartRoute.Models = { TEXT("opus") };
+	TestTrue(TEXT("Ordinary models still resolve through the same entry point"), Settings->TryResolveModelLaunch(SmartRoute, Prefix, Argument, Error));
+	TestTrue(TEXT("Ordinary models need no prefix"), Prefix.IsEmpty());
+	TestEqual(TEXT("Ordinary models keep their flag"), Argument, FString(TEXT("--model opus")));
 	return true;
 }
 
